@@ -809,16 +809,14 @@ function createInvoice() {
   if (!name) { toast('Customer name is required','error'); return; }
   const rows = document.querySelectorAll('#line-items-body .line-item-row');
   if (rows.length===0) { toast('Add at least one item','error'); return; }
-  const items=[]; let valid=true; const products=getProducts();
-  rows.forEach(row=>{ const inp=row.querySelectorAll('input'); const pn=inp[0].value.trim(); const qty=parseInt(inp[1].value)||0; const price=parseFloat(inp[2].value)||0; if(!pn||qty<1||price<=0){valid=false;return;} const prod=products.find(p=>p.name.toLowerCase()===pn.toLowerCase()); if(prod){const avail=loc==='Alabar'?prod.stockAlabar:prod.stockMorocco; if(avail<qty){toast('Insufficient stock for "'+pn+'". Available: '+avail,'error');valid=false;return;}} items.push({name:pn,qty,price,total:qty*price}); });
+  const items=[]; let valid=true;
+  rows.forEach(row=>{ const inp=row.querySelectorAll('input'); const pn=inp[0].value.trim(); const qty=parseInt(inp[1].value)||0; const price=parseFloat(inp[2].value)||0; if(!pn||qty<1||price<=0){valid=false;return;} items.push({name:pn,qty,price,total:qty*price}); });
   if (!valid) return;
   const total = items.reduce((s,i)=>s+i.total,0);
   const seq   = LS.get('lumoda_invoice_seq')||2388;
   const number = String(seq).padStart(6,'0');
   LS.set('lumoda_invoice_seq', seq+1);
   const invoice = { id:'inv_'+Date.now(), number, customerName:name, customerPhone:phone, customerAddress:addr, location:loc, items, total, status, payMethod, momoNumber, notes, createdBy:currentUser.username, createdByName:currentUser.fullName, createdAt:Date.now(), deleted:false };
-  products.forEach(prod=>{ items.forEach(item=>{ if(prod.name.toLowerCase()===item.name.toLowerCase()){ if(loc==='Alabar') prod.stockAlabar=Math.max(0,prod.stockAlabar-item.qty); else prod.stockMorocco=Math.max(0,prod.stockMorocco-item.qty); addStockHistory(prod.id,prod.name,loc,-item.qty,'Sale','Invoice '+number); } }); });
-  LS.set('lumoda_products', products);
   const invoices = LS.get('lumoda_invoices')||[]; invoices.push(invoice); LS.set('lumoda_invoices', invoices);
   saveCustomerIfNew(name,phone,addr,loc);
   addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
@@ -847,17 +845,14 @@ function buildInvoiceHTML(inv) {
 
 function deleteInvoice(id) {
   if (!requireAdmin('delete invoices')) return;
-  if (!confirm('Soft-delete this invoice? Stock will be restored. It remains in the audit trail.')) return;
+  if (!confirm('Soft-delete this invoice? It remains in the audit trail.')) return;
   const invoices = LS.get('lumoda_invoices')||[];
   const idx = invoices.findIndex(i=>i.id===id); if(idx<0) return;
   const inv = invoices[idx];
-  const products = getProducts();
-  inv.items.forEach(item=>{ const prod=products.find(p=>p.name.toLowerCase()===item.name.toLowerCase()); if(prod){ if(inv.location==='Alabar') prod.stockAlabar+=item.qty; else prod.stockMorocco+=item.qty; addStockHistory(prod.id,prod.name,inv.location,+item.qty,'Return','Invoice '+inv.number+' deleted'); } });
-  LS.set('lumoda_products', products);
   invoices[idx]={...inv,deleted:true,deletedAt:Date.now(),deletedBy:currentUser.username};
   LS.set('lumoda_invoices', invoices);
-  addAudit('Invoice Deleted', currentUser.fullName+' deleted '+inv.number+' — stock restored ['+inv.location+']');
-  closeModal('view-invoice-modal'); toast('Invoice deleted. Stock restored.'); renderPage('invoices');
+  addAudit('Invoice Deleted', currentUser.fullName+' deleted '+inv.number+' ['+inv.location+']');
+  closeModal('view-invoice-modal'); toast('Invoice deleted.'); renderPage('invoices');
 }
 
 function copyInvoiceText() {
