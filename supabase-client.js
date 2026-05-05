@@ -205,7 +205,7 @@
   async function createInvoice(payload) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
-    return sb.rpc('create_invoice', payload);
+    return sb.rpc('create_invoice_no_stock', payload);
   }
 
   async function createInvoiceNoStock(payload) {
