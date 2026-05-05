@@ -8,19 +8,23 @@
 
   function init() {
     if (!isConfigured()) return null;
+
     if (!window.supabase || !window.supabase.createClient) {
       console.warn('Supabase SDK was not loaded.');
       return null;
     }
+
     if (!client) {
       client = window.supabase.createClient(cfg.url, cfg.anonKey, {
         auth: {
-          persistSession: false,
+          persistSession: true,
           autoRefreshToken: true,
-          detectSessionInUrl: true
+          detectSessionInUrl: true,
+          storage: window.localStorage
         }
       });
     }
+
     return client;
   }
 
@@ -97,6 +101,7 @@
       .from('products')
       .select('id, name, sku, category, price, stock_alabar, stock_morocco, reorder_level')
       .order('name', { ascending: true });
+
     if (error) throw error;
     return (data || []).map(toLocalProduct);
   }
@@ -108,6 +113,7 @@
       .from('customers')
       .select('id, name, phone, address, location, created_at')
       .order('created_at', { ascending: false });
+
     if (error) throw error;
     return (data || []).map(toLocalCustomer);
   }
@@ -117,9 +123,11 @@
     if (!sb) throw new Error('Supabase is not configured.');
     const { data, error } = await sb
       .from('invoices')
-      .select('id, number, customer_name, customer_phone, customer_address, location, total, status, pay_method, momo_number, notes, created_by, created_by_name, created_at, deleted, deleted_at, deleted_by, invoice_items(id, name, qty, price)')
+      .select('id, number, customer_name, customer_phone, customer_address, location, total, status, pay_method, momo_number, notes, created_by, created_at, deleted, deleted_at, deleted_by, invoice_items(id, name, qty, price)')
       .order('created_at', { ascending: false });
+
     if (error) throw error;
+
     return (data || []).map(row => ({
       id: row.id,
       number: row.number,
@@ -127,14 +135,19 @@
       customerPhone: row.customer_phone,
       customerAddress: row.customer_address,
       location: row.location,
-      items: (row.invoice_items || []).map(it => ({ name: it.name, qty: it.qty, price: Number(it.price || 0), total: Number(it.qty || 0) * Number(it.price || 0) })),
+      items: (row.invoice_items || []).map(it => ({
+        name: it.name,
+        qty: it.qty,
+        price: Number(it.price || 0),
+        total: Number(it.qty || 0) * Number(it.price || 0)
+      })),
       total: Number(row.total || 0),
       status: row.status,
       payMethod: row.pay_method,
       momoNumber: row.momo_number,
       notes: row.notes || '',
       createdBy: row.created_by,
-      createdByName: row.created_by_name || row.created_by,
+      createdByName: row.created_by,
       createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
       deleted: !!row.deleted,
       deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
@@ -149,6 +162,7 @@
       .from('profiles')
       .select('id, email, username, full_name, role, location, active, must_change_password, created_at, updated_at')
       .order('created_at', { ascending: false });
+
     if (error) throw error;
     return data || [];
   }
