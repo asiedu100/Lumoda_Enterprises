@@ -10,7 +10,7 @@ const WARNING_MS         = 60 * 1000;
 const MAX_FAILED_LOGINS  = 5;
 const LOCKOUT_MS         = 15 * 60 * 1000;
 const TEMP_PW_EXPIRY_MS  = 24 * 60 * 60 * 1000;
-const DEFAULT_ADMIN_PASSWORD = 'Lumoda@2026';
+// Production auth is handled by Supabase only. No hardcoded admin password is kept in this file.
 
 // ---- STATE ----
 let currentUser      = null;
@@ -58,7 +58,7 @@ function normalizeUser(user, index) {
     id: user.id || (username === 'admin' ? 'u_admin' : 'u_' + (username || index)),
     username,
     fullName: user.fullName || (username === 'admin' ? 'System Administrator' : username.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())),
-    passwordHash: user.passwordHash || hashPw(DEFAULT_ADMIN_PASSWORD),
+    passwordHash: user.passwordHash || null,
     role,
     location: role === 'admin' ? 'All' : (user.location || (username === 'mary' ? 'Morocco' : 'Alabar')),
     active: user.active !== false,
@@ -74,36 +74,10 @@ function normalizeUser(user, index) {
 
 function ensureUsers() {
   let users = LS.get('lumoda_users');
-  if (!Array.isArray(users) || !users.length) {
-    users = [{
-      id: 'u_admin',
-      username: 'admin',
-      fullName: 'System Administrator',
-      passwordHash: hashPw(DEFAULT_ADMIN_PASSWORD),
-      role: 'admin',
-      location: 'All',
-      active: true,
-      mustChangePassword: false,
-      tempPasswordExpiry: null,
-      failedLogins: 0,
-      lockedUntil: null,
-      createdAt: Date.now(),
-      createdBy: 'system',
-      lastLogin: null,
-    }];
+  if (!Array.isArray(users)) {
+    users = [];
   } else {
     users = users.map(normalizeUser).filter(u => u.username);
-    if (!users.some(u => u.username === 'admin')) {
-      users.unshift(normalizeUser({
-        id: 'u_admin',
-        username: 'admin',
-        fullName: 'System Administrator',
-        passwordHash: hashPw(DEFAULT_ADMIN_PASSWORD),
-        role: 'admin',
-        location: 'All',
-        active: true,
-      }, 0));
-    }
   }
   LS.set('lumoda_users', users);
 }
@@ -331,6 +305,10 @@ async function doLogin() {
     }
   }
 
+  errEl.textContent = 'Supabase is not configured on this deployment. Please check that supabase-config.js is uploaded and loading correctly.';
+  errEl.style.display = 'block';
+  return;
+
   const users = getUsers();
   const user  = users.find(u => u.username.toLowerCase() === username);
 
@@ -420,6 +398,9 @@ function doChangePassword() {
     })();
     return;
   }
+  err.textContent = 'Supabase is not configured. Password changes must be handled through Supabase Auth.';
+  err.style.display = 'block';
+  return;
   const users = getUsers();
   const idx   = users.findIndex(u => u.id === currentUser.id);
   users[idx].passwordHash = hashPw(np); users[idx].mustChangePassword = false; users[idx].tempPasswordExpiry = null;
@@ -762,7 +743,7 @@ function selectPayMethod(method) {
 function addLineItem() {
   const id   = lineItemCount++;
   const opts = getProducts().map(p=>'<option value="'+p.name+'" data-price="'+p.price+'">'+p.name+'</option>').join('');
-  const priceLocked = !isAdmin();
+  const priceLocked = true;
   const priceExtra  = priceLocked ? ' readonly title="Only admin can change prices"' : '';
   const priceBg     = priceLocked ? 'background:var(--gray-50);color:var(--gray-400);cursor:not-allowed;' : '';
   const row  = document.createElement('div');
@@ -822,22 +803,27 @@ async function createInvoice() {
 
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try {
-      const products = getProducts();
+      const cachedProducts = getProducts();
+      // Build items — product_id is optional, server looks up by name if null
       const p_items = items.map(it => {
-        const prod = products.find(p => p.name.toLowerCase() === it.name.toLowerCase());
-        if (!prod) throw new Error('Product not found: ' + it.name);
-        return { product_id: prod.id, qty: it.qty };
+        const prod = cachedProducts.find(p => p.name.toLowerCase() === it.name.toLowerCase());
+        return {
+          product_id: prod ? prod.id : null,
+          name:       it.name,
+          qty:        it.qty,
+          price:      it.price
+        };
       });
       const res = await window.LumodaSupabase.createInvoiceNoStock({
-        p_customer_name: name,
-        p_location: loc,
-        p_items: p_items,
-        p_customer_phone: phone || null,
-        p_customer_address: addr || null,
-        p_status: status,
-        p_pay_method: payMethod || null,
-        p_momo_number: momoNumber || null,
-        p_notes: notes || null
+        p_customer_name:    name,
+        p_location:         loc,
+        p_items:            p_items,
+        p_customer_phone:   phone    || null,
+        p_customer_address: addr     || null,
+        p_status:           status,
+        p_pay_method:       payMethod || null,
+        p_momo_number:      momoNumber || null,
+        p_notes:            notes    || null
       });
       if (res.error) throw res.error;
       await syncSupabaseCache();
@@ -848,7 +834,8 @@ async function createInvoice() {
       try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
       return;
     } catch (err) {
-      toast(err.message || 'Could not create invoice', 'error');
+      console.error('Invoice creation error:', err);
+      toast((err.message||'Could not create invoice'), 'error');
       return;
     }
   }
@@ -1002,124 +989,25 @@ function orderStock(){if(!requireAdmin('order stock'))return;const low=getProduc
 // ============================================================
 let adjustingProductId=null;
 function openStockAdjust(pid){if(!requireAdmin('adjust stock'))return;adjustingProductId=pid;const prod=getProducts().find(p=>p.id===pid);if(!prod)return;document.getElementById('stock-prod-name').value=prod.name;document.getElementById('stock-qty').value='';document.getElementById('stock-note').value='';document.getElementById('stock-type').value='Purchase';openModal('stock-modal');}
-function applyStockAdjustment(){if(!requireAdmin('adjust stock'))return;const loc=document.getElementById('stock-location').value;const type=document.getElementById('stock-type').value;const qty=parseInt(document.getElementById('stock-qty').value);const note=document.getElementById('stock-note').value.trim();if(isNaN(qty)||qty===0){toast('Enter a valid quantity','error');return;}const products=getProducts();const idx=products.findIndex(p=>p.id===adjustingProductId);if(idx<0)return;const prod=products[idx];const isAdd=['Purchase','Return'].includes(type);const absQty=Math.abs(qty);const change=isAdd?absQty:-absQty;if(loc==='Alabar'){if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}products[idx].stockAlabar=Math.max(0,prod.stockAlabar+change);}else{if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}products[idx].stockMorocco=Math.max(0,prod.stockMorocco+change);}LS.set('lumoda_products',products);addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" ['+loc+']: '+(change>0?'+':'')+change+' ('+type+')'+(note?' — '+note:''));closeModal('stock-modal');toast('Stock updated');renderProducts();}
-function addStockHistory(productId,productName,location,change,type,note){const h=LS.get('lumoda_stockhistory')||[];h.unshift({id:'sh_'+Date.now(),productId,productName,location,change,type,note,by:currentUser?currentUser.username:'system',byName:currentUser?currentUser.fullName:'system',createdAt:Date.now()});LS.set('lumoda_stockhistory',h);}
+function applyStockAdjustment(){if(!requireAdmin('adjust stock'))return;const loc=document.getElementById('stock-location').value;const type=document.getElementById('stock-type').value;const qty=parseInt(document.getElementById('stock-qty').value);const note=document.getElementById('stock-note').value.trim();if(isNaN(qty)||qty===0){toast('Enter a valid quantity','error');return;}const products=getProducts();const idx=products.findIndex(p=>p.id===adjustingProductId);if(idx<0)return;const prod=products[idx];const isAdd=['Purchase','Return'].includes(type);const absQty=Math.abs(qty);const change=isAdd?absQty:-absQty;if(loc==='Alabar'){if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}products[idx].stockAlabar=Math.max(0,prod.stockAlabar+change);}else{if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}products[idx].stockMorocco=Math.max(0,prod.stockMorocco+change);}LS.set('lumoda_products',products);addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" '+(change>0?'+':'')+change+' at '+loc+' ('+type+')');closeModal('stock-modal');toast('Stock updated');renderProducts();renderDashboard();}
+function addStockHistory(productId,productName,location,change,type,note){const h=getStockHistory();h.unshift({id:'sh_'+Date.now(),productId,productName,location,change,type,note,by:currentUser.username,byName:currentUser.fullName,createdAt:Date.now()});LS.set('lumoda_stockhistory',h);}
+function renderStockHistory(){let h=filterByLoc(getStockHistory());h.sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt));document.getElementById('stockhistory-body').innerHTML=h.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No stock history yet</td></tr>':h.map(x=>'<tr><td class="mono">'+fmtDateTime(x.createdAt)+'</td><td><span class="badge badge-neutral">'+escapeHtml(x.type)+'</span></td><td>'+escapeHtml(x.productName)+'</td><td>'+escapeHtml(x.location)+'</td><td class="mono" style="color:'+(x.change>0?'#16a34a':'#dc2626')+'">'+(x.change>0?'+':'')+x.change+'</td><td>'+escapeHtml(x.note||'—')+'</td><td>'+escapeHtml(x.byName||x.by)+'</td></tr>').join('');}
+function filterStockHistory(val){const q=val.toLowerCase();document.querySelectorAll('#stockhistory-body tr').forEach(tr=>tr.style.display=tr.textContent.toLowerCase().includes(q)?'':'none');}
 
 // ============================================================
-// STOCK HISTORY
+// REPORTS
 // ============================================================
-let stockHistorySearch='';
-function renderStockHistory(){
-  let h=LS.get('lumoda_stockhistory')||[];
-  const effLoc=isAdmin()?currentLocation:currentUser.location;
-  if(effLoc!=='All') h=h.filter(x=>x.location===effLoc);
-  if(stockHistorySearch){const q=stockHistorySearch.toLowerCase();h=h.filter(x=>x.productName.toLowerCase().includes(q)||x.type.toLowerCase().includes(q));}
-  const tbody=document.getElementById('stockhistory-body');
-  tbody.innerHTML=h.length===0?'<tr><td colspan="9" style="text-align:center;color:var(--gray-400);padding:40px">No stock history yet</td></tr>':h.slice(0,150).map(x=>{const tb=x.type==='Sale'?'<span class="badge badge-danger">Sale</span>':x.type==='Purchase'?'<span class="badge badge-success">Purchase</span>':x.type==='Return'?'<span class="badge badge-info">Return</span>':'<span class="badge badge-neutral">'+x.type+'</span>';return '<tr><td class="mono">'+fmtDate(x.createdAt)+'</td><td>'+tb+'</td><td style="font-weight:500">'+x.productName+'</td><td><span class="badge badge-neutral">'+x.location+'</span></td><td class="mono" style="font-weight:600;color:'+(x.change>=0?'#16a34a':'#dc2626')+'">'+(x.change>=0?'+':'')+x.change+'</td><td class="mono" style="color:var(--gray-400)">—</td><td class="mono" style="color:var(--gray-400)">—</td><td style="color:var(--gray-400);font-size:12px">'+x.note+'</td><td style="color:var(--gray-400);font-size:12px">'+(x.byName||x.by)+'</td></tr>';}).join('');
-}
-function filterStockHistory(val){stockHistorySearch=val;renderStockHistory();}
-function exportCSV(){if(!requireAdmin('export data'))return;const h=LS.get('lumoda_stockhistory')||[];const rows=[['Date','Type','Product','Location','Change','Note','By']];h.forEach(x=>rows.push([fmtDate(x.createdAt),x.type,x.productName,x.location,x.change,x.note,x.byName||x.by]));const csv=rows.map(r=>r.map(c=>'"'+c+'"').join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='lumoda_stock_history.csv';a.click();URL.revokeObjectURL(url);}
+function renderReports(){if(!isAdmin())return;const invoices=filterByLoc(getInvoices());const now=new Date();const today=startOfLocalDay(now);const weekStart=startOfWeek(now);const nextWeek=new Date(weekStart);nextWeek.setDate(nextWeek.getDate()+7);const prevWeek=new Date(weekStart);prevWeek.setDate(prevWeek.getDate()-7);const monthStart=new Date(now.getFullYear(),now.getMonth(),1);const todayTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=today));const weekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=weekStart&&t<nextWeek;}));const lastWeekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=prevWeek&&t<weekStart;}));const monthTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=monthStart));const allTotal=sumInvoiceTotal(invoices);document.getElementById('rep-today').textContent=fmtGHS(todayTotal);document.getElementById('rep-week').textContent=fmtGHS(weekTotal);document.getElementById('rep-last-week').textContent=fmtGHS(lastWeekTotal);document.getElementById('rep-week-delta').innerHTML=weekComparisonLabel(weekTotal,lastWeekTotal);document.getElementById('rep-month').textContent=fmtGHS(monthTotal);document.getElementById('rep-alltime').textContent=fmtGHS(allTotal);renderPaymentBreakdown(invoices);renderLocationBreakdown(invoices);renderTopProducts(invoices);renderMonthlyChart(invoices);}
+function renderPaymentBreakdown(invoices){const paid=invoices.filter(i=>i.status==='paid');const cash=paid.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);const momo=paid.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);const uns=paid.filter(i=>!i.payMethod).reduce((s,i)=>s+i.total,0);document.getElementById('payment-breakdown').innerHTML='<div style="display:grid;gap:8px"><div class="stat-card" style="padding:10px"><div class="stat-label">Cash</div><div class="stat-value" style="font-size:18px">'+fmtGHS(cash)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Mobile Money</div><div class="stat-value" style="font-size:18px">'+fmtGHS(momo)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Unspecified Paid</div><div class="stat-value" style="font-size:18px">'+fmtGHS(uns)+'</div></div></div>';}
+function renderLocationBreakdown(invoices){const locs=['Alabar','Morocco'];document.getElementById('location-breakdown').innerHTML=locs.map(l=>{const arr=invoices.filter(i=>i.location===l);return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100)"><span>'+l+'</span><strong>'+fmtGHS(sumInvoiceTotal(arr))+'</strong><span class="mono" style="color:var(--gray-400)">'+arr.length+' inv</span></div>';}).join('');}
+function renderTopProducts(invoices){const map={};invoices.forEach(inv=>inv.items.forEach(it=>{map[it.name]=(map[it.name]||0)+it.total;}));const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);document.getElementById('top-products').innerHTML=top.length?top.map(([n,t],i)=>'<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--gray-100)"><span>'+(i+1)+'. '+escapeHtml(n)+'</span><strong>'+fmtGHS(t)+'</strong></div>').join(''):'<div style="color:var(--gray-400);font-size:13px">No product sales yet</div>';}
+function renderMonthlyChart(invoices){const months=[];const now=new Date();for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const next=new Date(d.getFullYear(),d.getMonth()+1,1);const total=invoices.filter(inv=>{const t=asTimestamp(inv.createdAt);return t>=d&&t<next;}).reduce((s,inv)=>s+inv.total,0);months.push({label:d.toLocaleDateString('en',{month:'short'}),total});}const max=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/max*120);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total):'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');}
 
 // ============================================================
-// REPORTS (admin only)
+// USER MANAGEMENT
 // ============================================================
-function renderReports(){
-  if(!isAdmin()){navigate('dashboard',null);return;}
-  const invoices=filterByLoc(getInvoices()); const now=new Date(); const today=startOfLocalDay(now); const weekStart=startOfWeek(now); const nextWeek=new Date(weekStart); nextWeek.setDate(nextWeek.getDate()+7); const prevWeek=new Date(weekStart); prevWeek.setDate(prevWeek.getDate()-7); const monthStart=new Date(now.getFullYear(),now.getMonth(),1); const sum=arr=>arr.reduce((s,i)=>s+i.total,0);
-  const todaySales = sum(invoices.filter(i=>asTimestamp(i.createdAt)>=today));
-  const thisWeekSales = sum(invoices.filter(i=>{const createdAt=asTimestamp(i.createdAt); return createdAt>=weekStart&&createdAt<nextWeek;}));
-  const lastWeekSales = sum(invoices.filter(i=>{const createdAt=asTimestamp(i.createdAt); return createdAt>=prevWeek&&createdAt<weekStart;}));
-  document.getElementById('rep-today').textContent=fmtGHS(todaySales);
-  document.getElementById('rep-week').textContent=fmtGHS(thisWeekSales);
-  const repWeekDelta = document.getElementById('rep-week-delta');
-  if (repWeekDelta) repWeekDelta.innerHTML = weekComparisonLabel(thisWeekSales, lastWeekSales);
-  const repLastWeek = document.getElementById('rep-last-week');
-  if (repLastWeek) repLastWeek.textContent=fmtGHS(lastWeekSales);
-  document.getElementById('rep-month').textContent=fmtGHS(sum(invoices.filter(i=>asTimestamp(i.createdAt)>=monthStart)));
-  document.getElementById('rep-alltime').textContent=fmtGHS(sum(invoices));
-  const byStatus={};invoices.forEach(i=>{byStatus[i.status]=(byStatus[i.status]||0)+i.total;});
-  document.getElementById('payment-breakdown').innerHTML = (()=>{
-    const byStatus = {};
-    invoices.forEach(i=>{ byStatus[i.status]=(byStatus[i.status]||0)+i.total; });
-    const cashT = invoices.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);
-    const momoT = invoices.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);
-    let html = Object.entries(byStatus).length
-      ? Object.entries(byStatus).map(([s,t])=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--gray-50)">'+statusBadge(s)+'<span style="font-weight:500;font-family:var(--font-mono)">'+fmtGHS(t)+'</span></div>').join('')
-      : '<div style="color:var(--gray-400);font-size:13px">No data yet</div>';
-    if (cashT>0||momoT>0) {
-      html += '<div style="border-top:1px solid var(--gray-200);margin-top:10px;padding-top:10px">';
-      html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--gray-400);font-family:var(--font-mono);margin-bottom:8px">By Payment Method</div>';
-      if (cashT>0) html += '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--gray-50);font-size:13px"><span>💵 Cash</span><span class=\'mono\'>'+fmtGHS(cashT)+'</span></div>';
-      if (momoT>0) html += '<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px"><span>📱 Mobile Money</span><span class=\'mono\'>'+fmtGHS(momoT)+'</span></div>';
-      html += '</div>';
-    }
-    return html;
-  })();
-  const allInv=getInvoices();const aT=sum(allInv.filter(i=>i.location==='Alabar'));const mT=sum(allInv.filter(i=>i.location==='Morocco'));const aC=allInv.filter(i=>i.location==='Alabar').length;const mC=allInv.filter(i=>i.location==='Morocco').length;
-  document.getElementById('location-breakdown').innerHTML='<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-50)"><div><div style="font-weight:500">Alabar</div><div style="font-size:11px;color:var(--gray-400)">'+aC+' invoices</div></div><div class="mono" style="font-weight:600">'+fmtGHS(aT)+'</div></div><div style="display:flex;justify-content:space-between;padding:10px 0"><div><div style="font-weight:500">Morocco</div><div style="font-size:11px;color:var(--gray-400)">'+mC+' invoices</div></div><div class="mono" style="font-weight:600">'+fmtGHS(mT)+'</div></div>';
-  const ps={};invoices.forEach(inv=>inv.items.forEach(item=>{ps[item.name]=(ps[item.name]||0)+item.total;}));const top=Object.entries(ps).sort((a,b)=>b[1]-a[1]).slice(0,5);
-  document.getElementById('top-products').innerHTML=top.map(([name,total],i)=>'<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--gray-50)"><div style="width:20px;font-family:var(--font-mono);font-size:11px;color:var(--gray-400)">'+(i+1)+'</div><div style="flex:1;font-size:13px">'+escapeHtml(name)+'</div><div style="font-family:var(--font-mono);font-size:12px;font-weight:500">'+fmtGHS(total)+'</div></div>').join('')||'<div style="color:var(--gray-400);font-size:13px">No data yet</div>';
-  const months=[];for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const end=new Date(now.getFullYear(),now.getMonth()-i+1,1);months.push({label:d.toLocaleDateString('en',{month:'short'}),total:sum(invoices.filter(inv=>asTimestamp(inv.createdAt)>=d&&asTimestamp(inv.createdAt)<end))});}
-  const maxM=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/maxM*140);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total/1000)+'k':'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');
-  const staffPerf={};allInv.forEach(i=>{if(!staffPerf[i.createdBy]) staffPerf[i.createdBy]={name:i.createdByName||i.createdBy,count:0,total:0};staffPerf[i.createdBy].count++;staffPerf[i.createdBy].total+=i.total;});
-  const perfEl=document.getElementById('staff-performance');if(perfEl){const rows=Object.entries(staffPerf).sort((a,b)=>b[1].total-a[1].total);perfEl.innerHTML=rows.length===0?'<div style="color:var(--gray-400);font-size:13px">No data yet</div>':rows.map(([,d])=>'<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid var(--gray-50)"><div><div style="font-size:13px;font-weight:500">'+escapeHtml(d.name)+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">'+d.count+' invoice'+(d.count!==1?'s':'')+'</div></div><div class="mono" style="font-weight:600">'+fmtGHS(d.total)+'</div></div>').join('');}
-}
-
-// ============================================================
-// AUDIT LOG (admin only)
-// ============================================================
-let auditSearch='';
-function renderAuditLog(){
-  if(!isAdmin()){navigate('dashboard',null);return;}
-  let logs=LS.get('lumoda_audit')||[];
-  if(auditSearch){const q=auditSearch.toLowerCase();logs=logs.filter(l=>l.action.toLowerCase().includes(q)||l.detail.toLowerCase().includes(q));}
-  const el=document.getElementById('audit-list');
-  el.innerHTML=logs.length===0?'<div style="padding:40px;text-align:center;color:var(--gray-400)">No audit entries yet</div>':logs.slice(0,300).map(l=>{const c=l.action.includes('Delete')?'#dc2626':l.action.includes('Login')?'#16a34a':l.action.includes('Lock')?'#f59e0b':'var(--gray-800)';return '<div class="audit-item"><div style="width:8px;height:8px;border-radius:50%;background:'+c+';flex-shrink:0;margin-top:5px"></div><div><div style="font-size:13px;font-weight:500;color:'+c+'">'+escapeHtml(l.action)+'</div><div style="font-size:13px;color:var(--gray-600)">'+escapeHtml(l.detail)+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono);margin-top:2px">'+fmtDateTime(l.createdAt)+' · '+escapeHtml(l.byName||l.by)+'</div></div></div>';}).join('');
-}
-function filterAudit(val){auditSearch=val;renderAuditLog();}
-
-// ============================================================
-// USER MANAGEMENT (admin only)
-// ============================================================
-async function renderUsers(){
-  if(!isAdmin()){navigate('dashboard',null);return;}
-  renderSessionsPanel();
-  const sessions=getSessions();
-  let users=getUsers();
-  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-    try {
-      const profiles = await window.LumodaSupabase.loadProfiles();
-      users = profiles.map(profile => ({
-        id: profile.id,
-        email: profile.email || '',
-        username: profile.username,
-        fullName: profile.full_name,
-        role: profile.role,
-        location: profile.location,
-        active: profile.active !== false,
-        mustChangePassword: !!profile.must_change_password,
-        lockedUntil: null,
-        lastLogin: null
-      }));
-    } catch (error) {
-      console.warn('Could not load Supabase profiles for the users page.', error);
-    }
-  }
-  document.getElementById('users-body').innerHTML=users.map(u=>{
-    const online=sessions.some(s=>s.username===u.username);
-    const locked=u.lockedUntil&&Date.now()<u.lockedUntil;
-    const status=!u.active?'<span class="badge badge-danger">Inactive</span>':locked?'<span class="badge badge-warning">Locked</span>':u.mustChangePassword?'<span class="badge badge-info">Temp PW</span>':online?'<span class="badge badge-success">● Online</span>':'<span class="badge badge-neutral">Offline</span>';
-    let actions;
-    if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-      actions = '<span style="font-size:11px;color:var(--gray-400)">Managed in Supabase</span>';
-    } else if (u.id === 'u_admin') {
-      actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>';
-    } else {
-      actions = '<button class="btn btn-secondary btn-sm" onclick="resetUserPassword(\''+u.id+'\')">Reset PW</button><button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\''+u.id+'\')">'+(u.active?'Deactivate':'Activate')+'</button>'+(locked?'<button class="btn btn-secondary btn-sm" onclick="unlockUser(\''+u.id+'\')">Unlock</button>':'');
-    }
-    return '<tr><td><div style="font-weight:500">'+escapeHtml(u.fullName)+'</div></td><td><span class="mono">@'+escapeHtml(u.username)+'</span></td><td><span class="badge '+(u.role==='admin'?'badge-neutral':'badge-info')+'">'+escapeHtml(u.role)+'</span></td><td>'+escapeHtml(u.location)+'</td><td>'+status+'</td><td class="mono" style="color:var(--gray-400);font-size:12px">'+(u.lastLogin?fmtDateTime(u.lastLogin):'Never')+'</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+actions+'</td></tr>';
-  }).join('');
-}
+function renderSessionsPanel(){const p=document.getElementById('active-sessions-panel');if(!p)return;if(!isAdmin()){p.style.display='none';return;}p.style.display='block';const sessions=getSessions();document.getElementById('active-sessions-count').textContent=sessions.length+' active';document.getElementById('active-sessions-list').innerHTML=sessions.length?sessions.map(s=>'<div style="display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--gray-50)"><span><span class="session-dot"></span>'+escapeHtml(s.fullName)+' <span class="mono">@'+escapeHtml(s.username)+'</span></span><span class="mono" style="color:var(--gray-400)">'+escapeHtml(s.location)+' · '+fmtAgo(s.lastActivity)+'</span></div>').join(''):'<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';}
+function renderUsers(){if(!isAdmin())return;renderSessionsPanel();const sessions=getSessions();const sc=document.getElementById('sessions-count-users');if(sc)sc.textContent=sessions.length+' active';const sl=document.getElementById('sessions-list-users');if(sl)sl.innerHTML=sessions.length?sessions.map(s=>'<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--gray-50)"><span><span class="session-dot"></span>'+escapeHtml(s.fullName)+' <span class="mono">@'+escapeHtml(s.username)+'</span></span><span class="mono" style="color:var(--gray-400)">'+escapeHtml(s.location)+' · '+fmtAgo(s.lastActivity)+'</span></div>').join(''):'<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';const users=getUsers();document.getElementById('users-body').innerHTML=users.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No local user cache. Create users in Supabase.</td></tr>':users.map(u=>{const status=!u.active?'<span class="badge badge-danger">Inactive</span>':u.mustChangePassword?'<span class="badge badge-warning">Must Change PW</span>':u.lockedUntil&&Date.now()<u.lockedUntil?'<span class="badge badge-danger">Locked</span>':'<span class="badge badge-success">Active</span>';let actions='';if(u.id!==currentUser.id){actions+='<button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\''+u.id+'\')">'+(u.active?'Deactivate':'Activate')+'</button>';if(u.lockedUntil&&Date.now()<u.lockedUntil)actions+='<button class="btn btn-secondary btn-sm" onclick="unlockUser(\''+u.id+'\')">Unlock</button>';}return '<tr><td><div style="font-weight:500">'+escapeHtml(u.fullName)+'</div></td><td><span class="mono">@'+escapeHtml(u.username)+'</span></td><td><span class="badge '+(u.role==='admin'?'badge-neutral':'badge-info')+'">'+escapeHtml(u.role)+'</span></td><td>'+escapeHtml(u.location)+'</td><td>'+status+'</td><td class="mono" style="color:var(--gray-400);font-size:12px">'+(u.lastLogin?fmtDateTime(u.lastLogin):'Never')+'</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+actions+'</td></tr>';}).join('');}
 
 function openCreateUserModal(){
   if(!requireAdmin('create users'))return;
@@ -1149,7 +1037,7 @@ function saveNewUser(){
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     (async () => {
       const actionButton = document.querySelector('#create-user-modal .btn.btn-primary');
-      if (actionButton) { actionButton.disabled = true; actionButton.textContent = 'Creating...'; }
+      if (actionButton) { actionButton.disabled = true; actionButton.textContent = 'Creating.'; }
       try {
         const result = await window.LumodaSupabase.createStaffAccount({ email, username, fullName, role, location });
         addAudit('User Created', currentUser.fullName+' created Supabase account for "'+fullName+'" (@'+username+') ['+location+']');
@@ -1167,148 +1055,43 @@ function saveNewUser(){
     })();
     return;
   }
-  const users=getUsers();
-  if(users.find(u=>u.username===username)){errEl.textContent='Username already taken.';errEl.style.display='block';return;}
-  const tempPw='LM'+Math.random().toString(36).substring(2,8).toUpperCase();
-  users.push({id:'u_'+Date.now(),email,username,fullName,role,location,passwordHash:hashPw(tempPw),active:true,mustChangePassword:true,tempPasswordExpiry:Date.now()+TEMP_PW_EXPIRY_MS,failedLogins:0,lockedUntil:null,createdAt:Date.now(),createdBy:currentUser.username,lastLogin:null});
-  LS.set('lumoda_users',users);
-  addAudit('User Created',currentUser.fullName+' created account for "'+fullName+'" (@'+username+') ['+location+']');
-  closeModal('create-user-modal'); renderUsers();
-  showTempPasswordModal(fullName,username,tempPw,location);
-  const emailEl = document.getElementById('temp-email-display');
-  if (emailEl) emailEl.textContent = email;
-}
 
-function showTempPasswordModal(fullName,username,tempPw,location){
-  _lastTempPw = tempPw;
-  document.getElementById('temp-pw-display').innerHTML =
-    '<div style="margin-bottom:14px;font-size:14px">Account created for <strong>'+escapeHtml(fullName)+'</strong></div>' +
-    '<div style="display:grid;grid-template-columns:auto 1fr;gap:9px 16px;font-size:13px;align-items:center;margin-bottom:16px">' +
-    '<span style="color:var(--gray-400)">Username</span><strong style="font-family:var(--font-mono)">'+escapeHtml(username)+'</strong>' +
-    '<span style="color:var(--gray-400)">Email</span><span id="temp-email-display">—</span>' +
-    '<span style="color:var(--gray-400)">Branch</span><span>'+escapeHtml(location)+'</span>' +
-    '<span style="color:var(--gray-400)">Temp Password</span>' +
-    '<div style="font-family:var(--font-mono);font-size:20px;font-weight:600;color:var(--brand-red);background:var(--gray-50);padding:8px 14px;border-radius:var(--radius);letter-spacing:.1em;border:1px dashed var(--gray-200)">'+escapeHtml(tempPw)+'</div>' +
-    '<span style="color:var(--gray-400)">Expires</span><span style="color:#f59e0b;font-size:12px">Within 24 hours</span>' +
-    '</div>' +
-    '<div style="background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);padding:10px 12px;font-size:12px;color:#854d0e">⚠ Share this directly with the staff member. They must change it on first login. This is the only time it is shown.</div>';
-  openModal('temp-pw-modal');
+  errEl.textContent = 'Supabase is not configured. Staff accounts must be created in Supabase, not in browser local storage.';
+  errEl.style.display = 'block';
+  return;
 }
-
-function resetUserPassword(userId){
-  if(!requireAdmin('reset passwords'))return;
-  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
-  const tempPw='LM'+Math.random().toString(36).substring(2,8).toUpperCase();
-  users[idx].passwordHash=hashPw(tempPw); users[idx].mustChangePassword=true; users[idx].tempPasswordExpiry=Date.now()+TEMP_PW_EXPIRY_MS; users[idx].failedLogins=0; users[idx].lockedUntil=null;
-  LS.set('lumoda_users',users);
-  addAudit('Password Reset',currentUser.fullName+' reset password for "'+users[idx].fullName+'"');
-  renderUsers(); showTempPasswordModal(users[idx].fullName,users[idx].username,tempPw,users[idx].location);
-}
-
-function toggleUserActive(userId){
-  if(!requireAdmin('manage users'))return;
-  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
-  users[idx].active=!users[idx].active;
-  LS.set('lumoda_users',users);
-  if(!users[idx].active){ LS.set('lumoda_sessions',getSessions().filter(s=>s.username!==users[idx].username)); }
-  addAudit(users[idx].active?'User Activated':'User Deactivated',currentUser.fullName+' '+(users[idx].active?'activated':'deactivated')+' "'+users[idx].fullName+'"');
-  toast(users[idx].fullName+' '+(users[idx].active?'activated':'deactivated'));
-  renderUsers();
-}
-
-function unlockUser(userId){
-  if(!requireAdmin('unlock accounts'))return;
-  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
-  users[idx].lockedUntil=null; users[idx].failedLogins=0;
-  LS.set('lumoda_users',users);
-  addAudit('Account Unlocked',currentUser.fullName+' unlocked "'+users[idx].fullName+'"');
-  toast(users[idx].fullName+' unlocked'); renderUsers();
-}
-
-function openChangeMyPassword(){
-  document.getElementById('my-new-pw').value=''; document.getElementById('my-confirm-pw').value='';
-  document.getElementById('my-pw-error').style.display='none';
-  openModal('my-password-modal');
-}
-function saveMyPassword(){
-  const np=document.getElementById('my-new-pw').value; const cp=document.getElementById('my-confirm-pw').value; const err=document.getElementById('my-pw-error'); err.style.display='none';
-  if(np.length<6){err.textContent='Minimum 6 characters.';err.style.display='block';return;}
-  if(np!==cp){err.textContent='Passwords do not match.';err.style.display='block';return;}
-  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-    (async () => {
-      try {
-        const sb = window.LumodaSupabase.getClient();
-        const { error: updateError } = await sb.auth.updateUser({ password: np });
-        if (updateError) throw updateError;
-        addAudit('Password Changed', currentUser.fullName+' changed their password');
-        closeModal('my-password-modal'); toast('Password updated');
-      } catch (error) {
-        err.textContent = error.message || 'Could not update your password.';
-        err.style.display = 'block';
-      }
-    })();
-    return;
-  }
-  const users=getUsers(); const idx=users.findIndex(u=>u.id===currentUser.id);
-  users[idx].passwordHash=hashPw(np); users[idx].mustChangePassword=false; users[idx].tempPasswordExpiry=null;
-  LS.set('lumoda_users',users); currentUser={...users[idx]};
-  addAudit('Password Changed',currentUser.fullName+' changed their password');
-  closeModal('my-password-modal'); toast('Password updated');
-}
+function showTempPasswordModal(fullName,username,pw,loc){document.getElementById('temp-pw-display').innerHTML='<div style="text-align:center"><div style="font-size:14px;margin-bottom:8px"><strong>'+escapeHtml(fullName)+'</strong> <span class="mono">@'+escapeHtml(username)+'</span></div><div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">'+escapeHtml(loc)+'</div><div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;font-family:var(--font-mono);font-size:20px;font-weight:700;letter-spacing:.08em" id="temp-pw-text">'+escapeHtml(pw)+'</div><div style="font-size:12px;color:#854d0e;margin-top:10px">Give this temporary password to the staff member. It expires in 24 hours.</div><div id="temp-email-display" style="font-size:11px;color:var(--gray-400);margin-top:6px"></div></div>';openModal('temp-pw-modal');}
+function copyTempPw(){const txt=document.getElementById('temp-pw-text')?.textContent||'';try{navigator.clipboard.writeText(txt);toast('Temporary password copied');}catch{}}
+function toggleUserActive(id){const users=getUsers();const idx=users.findIndex(u=>u.id===id);if(idx<0)return;users[idx].active=!users[idx].active;LS.set('lumoda_users',users);addAudit('User Status Changed',currentUser.fullName+' '+(users[idx].active?'activated':'deactivated')+' @'+users[idx].username);renderUsers();}
+function unlockUser(id){const users=getUsers();const idx=users.findIndex(u=>u.id===id);if(idx<0)return;users[idx].lockedUntil=null;users[idx].failedLogins=0;LS.set('lumoda_users',users);addAudit('User Unlocked',currentUser.fullName+' unlocked @'+users[idx].username);renderUsers();}
 
 // ============================================================
-// COPY TEMP PASSWORD
+// AUDIT LOG
 // ============================================================
-let _lastTempPw = '';
-function copyTempPw() {
-  if (!_lastTempPw) return;
-  try { navigator.clipboard.writeText(_lastTempPw); toast('Password copied to clipboard!'); }
-  catch { toast('Could not copy — note it down manually', 'error'); }
-}
+function renderAuditLog(){if(!isAdmin())return;const log=LS.get('lumoda_audit')||[];document.getElementById('audit-list').innerHTML=log.length?log.map(a=>'<div class="audit-item"><div class="audit-dot"></div><div><div style="font-size:13px"><strong>'+escapeHtml(a.action)+'</strong> — '+escapeHtml(a.detail)+'</div><div class="audit-meta">'+escapeHtml(a.byName||a.by)+' · '+fmtDateTime(a.createdAt)+'</div></div></div>').join(''):'<div style="padding:40px;text-align:center;color:var(--gray-400)">No audit logs yet</div>';}
+function filterAudit(val){const q=val.toLowerCase();document.querySelectorAll('#audit-list .audit-item').forEach(el=>el.style.display=el.textContent.toLowerCase().includes(q)?'':'none');}
 
 // ============================================================
-// SESSIONS PANEL (users page)
+// MODALS
 // ============================================================
-function renderSessionsPanel() {
-  const sessions = getSessions();
-  const now = Date.now();
-  // Prune stale sessions older than 6 minutes
-  const active = sessions.filter(s => now - s.lastActivity < INACTIVITY_MS + 60000);
-  if (active.length !== sessions.length) LS.set('lumoda_sessions', active);
-
-  const buildSession = s => {
-    const initials = s.fullName.split(' ').map(n=>n[0]).join('').substring(0,2).toUpperCase();
-    return '<div style="display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid var(--gray-50);gap:12px">' +
-      '<div style="width:32px;height:32px;border-radius:50%;background:var(--brand-brown);color:var(--white);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0">' + initials + '</div>' +
-      '<div style="flex:1"><div style="font-size:13px;font-weight:500">' + s.fullName + '</div>' +
-      '<div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">' + s.role + ' · ' + s.location + ' · Last active: ' + fmtAgo(s.lastActivity) + '</div></div>' +
-      '<div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#16a34a;font-family:var(--font-mono)"><div style="width:7px;height:7px;border-radius:50%;background:#4ade80;animation:pulse 2s infinite"></div>Online</div>' +
-      '</div>';
-  };
-
-  const empty = '<div style="padding:20px 16px;color:var(--gray-400);font-size:13px">No active sessions</div>';
-
-  // Dashboard sessions card
-  const dashPanel = document.getElementById('active-sessions-panel');
-  const dashList  = document.getElementById('active-sessions-list');
-  if (dashPanel && dashList) {
-    dashPanel.style.display = isAdmin() ? 'block' : 'none';
-    if (isAdmin()) dashList.innerHTML = active.length ? active.map(buildSession).join('') : empty;
-  }
-
-  // Users page sessions
-  const usersCount = document.getElementById('sessions-count-users');
-  const usersList  = document.getElementById('sessions-list-users');
-  if (usersCount) usersCount.textContent = active.length + ' active';
-  if (usersList)  usersList.innerHTML = active.length ? active.map(buildSession).join('') : empty;
-}
+function openModal(id){document.getElementById(id).classList.add('open');}
+function closeModal(id){document.getElementById(id).classList.remove('open');}
+function openChangeMyPassword(){document.getElementById('my-new-pw').value='';document.getElementById('my-confirm-pw').value='';document.getElementById('my-pw-error').style.display='none';openModal('my-password-modal');}
+function saveMyPassword(){const np=document.getElementById('my-new-pw').value;const cp=document.getElementById('my-confirm-pw').value;const err=document.getElementById('my-pw-error');err.style.display='none';if(np.length<6){err.textContent='Password must be at least 6 characters.';err.style.display='block';return;}if(np!==cp){err.textContent='Passwords do not match.';err.style.display='block';return;}if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {(async()=>{try{const sb=window.LumodaSupabase.getClient();const { error }=await sb.auth.updateUser({ password: np });if(error) throw error;addAudit('Password Changed',currentUser.fullName+' changed their password');closeModal('my-password-modal');toast('Password updated');}catch(error){err.textContent=error.message||'Could not update password.';err.style.display='block';}})();return;}const users=getUsers();const idx=users.findIndex(u=>u.id===currentUser.id);if(idx>=0){users[idx].passwordHash=hashPw(np);LS.set('lumoda_users',users);addAudit('Password Changed',currentUser.fullName+' changed their password');closeModal('my-password-modal');toast('Password updated');}}
 
 // ============================================================
-// MODAL HELPERS
+// CSV IMPORT
 // ============================================================
-function openModal(id)  { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
-document.querySelectorAll('.modal-overlay').forEach(o=>o.addEventListener('click',e=>{ if(e.target===o) o.classList.remove('open'); }));
+let csvRows=[];
+function openCsvModal(){if(!requireAdmin('import CSV'))return;csvRows=[];document.getElementById('csv-file-input').value='';document.getElementById('csv-preview').style.display='none';document.getElementById('csv-import-btn').style.display='none';showCsvError('');openModal('csv-modal');}
+function showCsvError(msg){const e=document.getElementById('csv-error');if(!e)return;e.textContent=msg;e.style.display=msg?'block':'none';}
+function parseCsvLine(line){const out=[];let cur='',inQ=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ;}else if(ch===','&&!inQ){out.push(cur.trim());cur='';}else cur+=ch;}out.push(cur.trim());return out;}
+function parseCsvFile(input){const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const text=String(reader.result||'');const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)throw new Error('CSV must include headers and at least one product row.');const headers=parseCsvLine(lines[0]).map(h=>h.toLowerCase().replace(/\s+/g,''));const idx={name:headers.indexOf('name'),price:headers.indexOf('price'),sku:headers.indexOf('sku'),category:headers.indexOf('category'),alabar:headers.indexOf('alabarstock'),morocco:headers.indexOf('moroccostock'),reorder:headers.indexOf('reorderlevel')};if(idx.name<0||idx.price<0)throw new Error('Missing required columns: Name and Price.');csvRows=lines.slice(1).map((line,i)=>{const c=parseCsvLine(line);return{name:c[idx.name]||'',price:parseFloat(c[idx.price]||'0'),sku:idx.sku>=0?c[idx.sku]:'',category:idx.category>=0?c[idx.category]:'General',stockAlabar:idx.alabar>=0?parseInt(c[idx.alabar]||'0'):0,stockMorocco:idx.morocco>=0?parseInt(c[idx.morocco]||'0'):0,reorder:idx.reorder>=0?parseInt(c[idx.reorder]||'5'):5,row:i+2};}).filter(r=>r.name);renderCsvPreview();}catch(err){showCsvError(err.message);}};reader.readAsText(file);}
+function renderCsvPreview(){document.getElementById('csv-preview').style.display='block';document.getElementById('csv-import-btn').style.display=csvRows.length?'inline-flex':'none';document.getElementById('csv-preview-title').textContent=csvRows.length+' product(s) ready to import';document.getElementById('csv-preview-body').innerHTML=csvRows.map((r,i)=>'<tr><td>'+escapeHtml(r.name)+'</td><td>'+escapeHtml(r.sku||'—')+'</td><td>'+escapeHtml(r.category||'General')+'</td><td class="mono">'+fmtGHS(r.price||0)+'</td><td class="mono">'+(r.stockAlabar||0)+'</td><td class="mono">'+(r.stockMorocco||0)+'</td><td class="mono">'+(r.reorder||5)+'</td><td><button class="btn btn-danger btn-sm" onclick="removeCsvRow('+i+')">Remove</button></td></tr>').join('');}
+function removeCsvRow(i){csvRows.splice(i,1);renderCsvPreview();}
+async function importCsvProducts(){if(!requireAdmin('import products'))return;if(!csvRows.length)return;const products=getProducts();csvRows.forEach(r=>{const existing=products.find(p=>p.name.toLowerCase()===r.name.toLowerCase()||(r.sku&&p.sku.toLowerCase()===r.sku.toLowerCase()));if(existing){existing.price=r.price||existing.price;existing.category=r.category||existing.category;existing.stockAlabar=r.stockAlabar||0;existing.stockMorocco=r.stockMorocco||0;existing.reorder=r.reorder||5;}else{products.push({id:'p_'+Date.now()+'_'+Math.random().toString(16).slice(2),name:r.name,sku:r.sku||'SKU-'+Date.now(),category:r.category||'General',price:r.price||0,stockAlabar:r.stockAlabar||0,stockMorocco:r.stockMorocco||0,reorder:r.reorder||5});}});if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {try {const res = await window.LumodaSupabase.importProducts(csvRows.map(r => ({name: r.name, sku: r.sku, category: r.category || 'General', price: r.price || 0, stock_alabar: r.stockAlabar || 0, stock_morocco: r.stockMorocco || 0, reorder_level: r.reorder || 5})));if (res.error) throw res.error;await syncSupabaseCache();addAudit('CSV Imported', currentUser.fullName+' imported '+csvRows.length+' products [server]');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();return;} catch (err) {showCsvError(err.message || 'Could not import products to Supabase.');return;}}showCsvError('Supabase is not configured. CSV imports are disabled until supabase-config.js loads correctly.');return;LS.set('lumoda_products',products);addAudit('CSV Imported',currentUser.fullName+' imported '+csvRows.length+' products');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();}
+function downloadCsvTemplate(){const csv='Name,Price,SKU,Category,AlabarStock,MoroccoStock,ReorderLevel\nExample Product,100,EX-001,General,10,5,3';const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-products-template.csv';a.click();URL.revokeObjectURL(a.href);}
+function exportCSV(){const h=getStockHistory();const csv='Date,Type,Product,Location,Change,Note,By\n'+h.map(x=>[fmtDateTime(x.createdAt),x.type,x.productName,x.location,x.change,x.note,x.byName||x.by].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-stock-history.csv';a.click();URL.revokeObjectURL(a.href);}
 
 // ============================================================
 // MOBILE
@@ -1348,293 +1131,39 @@ function printInvoice() {
       <!-- HEADER -->
       <table width="100%" style="background:#5C2D0A;color:white;padding:10px 14px;margin-bottom:0" cellpadding="0" cellspacing="0"><tr>
         <td><div style="font-size:18px;font-weight:700;letter-spacing:1px">LUMODA ENTERPRISE</div><div style="font-style:italic;font-size:11px;opacity:.85">The cook's helper</div><div style="font-size:10px;opacity:.7">Dealers in All Kinds of Kitchen Accessories</div></td>
-        <td align="right"><div style="border:1px solid rgba(255,255,255,.4);padding:3px 10px;font-size:11px;font-weight:700;margin-bottom:6px">MAA LUCY'S PLACE</div><div style="font-size:9px;opacity:.75">LOC 1: Alabar, Ghana Region, Shop OCL/ZR/GF/A20 &amp; A21</div><div style="font-size:9px;opacity:.75">LOC 2: Morocco (K.O) Old Barbers Bldg GF 26</div><div style="font-size:9px;opacity:.75">TEL: 0244369357 / 0546014044 / 0243563481</div></td>
+        <td align="right"><div style="border:1px solid rgba(255,255,255,.4);padding:3px 10px;font-size:11px;font-weight:700">MAA LUCY'S PLACE</div></td>
       </tr></table>
-      <!-- RED BAR -->
-      <table width="100%" style="background:#C8291C;color:white;padding:5px 14px" cellpadding="0" cellspacing="0"><tr>
-        <td style="font-weight:700;font-size:13px;letter-spacing:2px">INVOICE</td>
-        <td align="center" style="font-family:monospace;font-size:12px">Nr: <strong>${inv.number}</strong></td>
-        <td align="right" style="font-family:monospace;font-size:11px">${fmtDate(inv.createdAt)}</td>
-      </tr></table>
-      <!-- CUSTOMER -->
-      <div style="padding:8px 14px;border:1px solid #ddd;border-top:none">
-        <table width="100%"><tr>
-          <td><strong>Name:</strong> ${inv.customerName}</td>
-          ${inv.customerPhone ? '<td><strong>Tel:</strong> '+inv.customerPhone+'</td>' : '<td></td>'}
-          <td align="right"><strong>Location:</strong> ${inv.location}</td>
-        </tr></table>
-        ${inv.customerAddress ? '<div style="font-size:11px;margin-top:3px"><strong>Address:</strong> '+inv.customerAddress+'</div>' : ''}
+      <div style="background:#C8291C;color:white;padding:6px 14px;display:flex;justify-content:space-between;font-weight:700;letter-spacing:.08em"><span>INVOICE</span><span>Nr: ${escapeHtml(inv.number)}</span><span>${fmtDate(inv.createdAt)}</span></div>
+      <div style="padding:10px 14px;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
+        <div><strong>Name:</strong> ${escapeHtml(inv.customerName)}</div>
+        ${inv.customerPhone?'<div><strong>Tel:</strong> '+escapeHtml(inv.customerPhone)+'</div>':''}
+        ${inv.customerAddress?'<div><strong>Address:</strong> '+escapeHtml(inv.customerAddress)+'</div>':''}
       </div>
-      <!-- ITEMS TABLE -->
-      <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #ddd;border-top:none">
-        <thead><tr style="background:#C8291C;color:white">
-          <th style="padding:7px 6px;text-align:center;width:50px;font-size:11px">QTY</th>
-          <th style="padding:7px 6px;text-align:left;font-size:11px">DESCRIPTION</th>
-          <th style="padding:7px 6px;text-align:right;width:110px;font-size:11px">@ UNIT</th>
-          <th style="padding:7px 6px;text-align:right;width:120px;font-size:11px">AMOUNT GH₵</th>
-        </tr></thead>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
+        <thead><tr style="background:#C8291C;color:white"><th style="padding:8px 6px;width:56px">QTY</th><th style="padding:8px 6px;text-align:left">DESCRIPTION</th><th style="padding:8px 6px;text-align:right">@ UNIT</th><th style="padding:8px 6px;text-align:right">AMOUNT GH₵</th></tr></thead>
         <tbody>${rows}${blanks}</tbody>
       </table>
-      <!-- TOTAL -->
-      <table width="100%" style="border:1px solid #ddd;border-top:2px solid #5C2D0A" cellpadding="0" cellspacing="0"><tr>
-        <td style="padding:8px 14px;font-size:11px;color:#666;font-style:italic">Goods sold out are not returnable</td>
-        <td align="right" style="padding:8px 14px;font-size:16px;font-weight:700;font-family:monospace;color:#5C2D0A">Total: ${fmtGHS(inv.total)}</td>
-      </tr></table>
-      <!-- PAYMENT & STATUS -->
-      <div style="padding:6px 14px;border:1px solid #ddd;border-top:none;background:#f9f9f7;font-size:12px">
-        <strong>Status:</strong> ${inv.status.toUpperCase()}${pmLine}${noteLine}
-      </div>
-      <!-- SIGNATURES -->
-      <table width="100%" style="margin-top:24px" cellpadding="0" cellspacing="0"><tr>
-        <td style="font-size:11px">Customer's Signature: _________________________</td>
-        <td align="right" style="font-size:11px">Manager's Signature: _________________________</td>
-      </tr></table>
-      <div style="text-align:center;font-size:10px;color:#999;margin-top:16px;font-style:italic">Thank you for your business!</div>
+      <div style="border:2px solid #5C2D0A;border-top:0;padding:10px 14px;text-align:right;font-size:16px"><strong>Total GH₵: ${fmtGHS(inv.total)}</strong></div>
+      <div style="padding:8px 0;font-size:11px;color:#555">Status: ${escapeHtml(inv.status.toUpperCase())}${pmLine}${noteLine}</div>
+      <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:11px"><span>Customer's Signature: _______________</span><span>Manager's Signature: _______________</span></div>
+      <div style="margin-top:14px;text-align:center;font-size:10px;color:#666">Goods sold out are not returnable</div>
     </div>`;
-  document.getElementById('print-area').innerHTML = html;
+  const printArea=document.getElementById('print-area');
+  printArea.innerHTML=html;
   window.print();
-  setTimeout(()=>{ document.getElementById('print-area').innerHTML=''; }, 1500);
 }
 
 // ============================================================
-// CSV PRODUCT IMPORT
+// INITIAL SESSION RESTORE
 // ============================================================
-let _csvParsed = [];
-
-function makeLumodaSku(name) {
-  const slug = String(name || '')
-    .trim()
-    .replace(/[.'"]/g, '')
-    .replace(/[^A-Za-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .toUpperCase();
-  return 'LMD-' + (slug || 'PRODUCT');
-}
-
-function openCsvModal() {
-  if (!isAdmin()) { toast('Admin only','error'); return; }
-  _csvParsed = [];
-  document.getElementById('csv-file-input').value = '';
-  document.getElementById('csv-preview').style.display = 'none';
-  document.getElementById('csv-import-btn').style.display = 'none';
-  const errEl = document.getElementById('csv-error');
-  if (errEl) { errEl.style.display='none'; errEl.textContent=''; }
-  openModal('csv-modal');
-}
-
-function parseCsvFile(input) {
-  const file = input.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    const text = e.target.result;
-    const lines = text.trim().split(/\r?\n/);
-    if (lines.length < 2) { showCsvError('File is empty or has no data rows.'); return; }
-    // Normalize headers
-    const headers = lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/\s+/g,''));
-    const required = ['name','price'];
-    const missing = required.filter(r=>!headers.includes(r));
-    if (missing.length) { showCsvError('Missing required columns: '+missing.join(', ')+'. Required: Name, Price'); return; }
-    const idx = {
-      name:       headers.indexOf('name'),
-      sku:        headers.indexOf('sku'),
-      category:   headers.indexOf('category'),
-      price:      headers.indexOf('price'),
-      stock:      headers.indexOf('stock'),
-      alabar:     headers.findIndex(h=>h.includes('alabar')),
-      morocco:    headers.findIndex(h=>h.includes('morocco')),
-      reorder:    headers.findIndex(h=>h.includes('reorder')),
-    };
-    const parsed = [];
-    for (let i=1; i<lines.length; i++) {
-      const cols = parseCsvLine(lines[i]);
-      if (!cols || cols.length < 2) continue;
-      const name = (cols[idx.name]||'').trim();
-      if (!name) continue;
-      const price = parseFloat(cols[idx.price]||'0') || 0;
-      const stock = idx.stock>=0 ? (parseInt(cols[idx.stock])||0) : 0;
-      parsed.push({
-        name,
-        sku:       idx.sku>=0 && (cols[idx.sku]||'').trim() ? (cols[idx.sku]||'').trim() : makeLumodaSku(name),
-        category:  idx.category>=0 ? (cols[idx.category]||'').trim() : 'General',
-        price,
-        stockAlabar:  idx.alabar>=0 ? (parseInt(cols[idx.alabar])||0) : stock,
-        stockMorocco: idx.morocco>=0 ? (parseInt(cols[idx.morocco])||0) : stock,
-        reorder:      idx.reorder>=0 ? (parseInt(cols[idx.reorder])||5) : 5,
-      });
+(async function restoreSession(){
+  try{
+    if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&autoLoginAllowed()){
+      const sb=window.LumodaSupabase.getClient();
+      const {data}=await sb.auth.getUser();
+      const user=data?.user;
+      if(user){const {data:profile}=await window.LumodaSupabase.getProfile(user.id);if(profile&&profile.active!==false){currentUser=supabaseProfileToLocal(profile);currentLocation=currentUser.location;currentUser.token=registerSession(currentUser);await syncSupabaseCache();showApp();return;}}
     }
-    if (!parsed.length) { showCsvError('No valid product rows found.'); return; }
-    _csvParsed = parsed;
-    renderCsvPreview(parsed);
-  };
-  reader.readAsText(file);
-}
-
-function parseCsvLine(line) {
-  // Handle quoted CSV fields
-  const result = [];
-  let cur='', inQ=false;
-  for (let i=0;i<line.length;i++) {
-    if (line[i]==='"') { inQ=!inQ; }
-    else if (line[i]===',' && !inQ) { result.push(cur); cur=''; }
-    else cur+=line[i];
-  }
-  result.push(cur);
-  return result;
-}
-
-function renderCsvPreview(parsed) {
-  const existing = getProducts();
-  const tbody = document.getElementById('csv-preview-body');
-  tbody.innerHTML = parsed.map((p,i)=>{
-    const dup = existing.find(e=>e.sku && p.sku && e.sku.toLowerCase()===p.sku.toLowerCase());
-    const action = dup ? '<span class="badge badge-warning">Update</span>' : '<span class="badge badge-success">New</span>';
-    return '<tr>'+
-      '<td style="font-weight:500">'+escapeHtml(p.name)+'</td>'+
-      '<td class="mono">'+escapeHtml(p.sku||'—')+'</td>'+
-      '<td>'+escapeHtml(p.category||'—')+'</td>'+
-      '<td class="mono">'+fmtGHS(p.price)+'</td>'+
-      '<td class="mono" style="text-align:center">'+p.stockAlabar+'</td>'+
-      '<td class="mono" style="text-align:center">'+p.stockMorocco+'</td>'+
-      '<td class="mono" style="text-align:center">'+p.reorder+'</td>'+
-      '<td>'+action+'</td></tr>';
-  }).join('');
-  document.getElementById('csv-preview-title').textContent = parsed.length+' products found — review before importing';
-  document.getElementById('csv-preview').style.display = 'block';
-  document.getElementById('csv-import-btn').style.display = 'inline-flex';
-  const errEl = document.getElementById('csv-error'); if(errEl) errEl.style.display='none';
-}
-
-function showCsvError(msg) {
-  const el = document.getElementById('csv-error');
-  if (el) { el.textContent=msg; el.style.display='block'; }
-  document.getElementById('csv-preview').style.display='none';
-  document.getElementById('csv-import-btn').style.display='none';
-  _csvParsed=[];
-}
-
-async function importCsvProducts() {
-  if (!_csvParsed.length) return;
-  const btn = document.getElementById('csv-import-btn');
-  if (btn) { btn.disabled = true; btn.textContent = 'Importing...'; }
-
-  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-    try {
-      const payload = _csvParsed.map(p => ({
-        name: p.name,
-        sku: p.sku || makeLumodaSku(p.name),
-        category: p.category || 'General',
-        price: p.price,
-        stock_alabar: p.stockAlabar || 0,
-        stock_morocco: p.stockMorocco || 0,
-        reorder_level: p.reorder || 5
-      }));
-      const { data, error } = await window.LumodaSupabase.importProducts(payload, {
-        stockTarget: 'both',
-        defaultCategory: 'General',
-        defaultReorder: 5
-      });
-      if (error) throw error;
-
-      try {
-        const remoteProducts = await window.LumodaSupabase.loadProducts();
-        LS.set('lumoda_products', remoteProducts);
-      } catch (e) {}
-
-      closeModal('csv-modal');
-      toast((data?.added || 0)+' added, '+(data?.updated || 0)+' updated in Supabase');
-      renderProducts();
-      _csvParsed = [];
-      return;
-    } catch (err) {
-      showCsvError(err.message || 'Supabase import failed. Make sure you are signed in as admin.');
-      if (btn) { btn.disabled = false; btn.textContent = 'Import Products'; }
-      return;
-    }
-  }
-
-  const products = getProducts();
-  let added=0, updated=0;
-  _csvParsed.forEach(p=>{
-    const dup = products.findIndex(e=>e.sku && p.sku && e.sku.toLowerCase()===p.sku.toLowerCase());
-    if (dup>=0) {
-      products[dup] = { ...products[dup], name:p.name, category:p.category||products[dup].category, price:p.price, stockAlabar:p.stockAlabar||products[dup].stockAlabar, stockMorocco:p.stockMorocco||products[dup].stockMorocco, reorder:p.reorder||products[dup].reorder };
-      updated++;
-    } else {
-      products.push({ id:'p_'+Date.now()+'_'+Math.random().toString(36).slice(2,5), name:p.name, sku:p.sku||('SKU-'+Date.now()), category:p.category||'General', price:p.price, stockAlabar:p.stockAlabar, stockMorocco:p.stockMorocco, reorder:p.reorder });
-      added++;
-    }
-  });
-  LS.set('lumoda_products', products);
-  addAudit('CSV Import', currentUser.fullName+' imported '+_csvParsed.length+' products ('+added+' new, '+updated+' updated)');
-  closeModal('csv-modal');
-  toast(added+' added, '+updated+' updated from CSV');
-  renderProducts();
-  _csvParsed=[];
-  if (btn) { btn.disabled = false; btn.textContent = 'Import Products'; }
-}
-
-function downloadCsvTemplate() {
-  const csv = 'Name,SKU,Category,Price,AlabarStock,MoroccoStock,ReorderLevel\n'+
-    'Blender,BLN-001,Appliances,250,10,8,5\n'+
-    'Cooking Pot,CPT-002,Cookware,80,20,15,5\n'+
-    'Frying Pan,FPN-003,Cookware,45,15,10,5\n';
-  const blob = new Blob([csv],{type:'text/csv'});
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement('a'); a.href=url; a.download='lumoda_products_template.csv'; a.click();
-  URL.revokeObjectURL(url);
-  toast('Template downloaded');
-}
-// ============================================================
-// APP STARTUP (FIX)
-// ============================================================
-
-async function bootApp() {
-  if (!autoLoginAllowed()) {
-    SS.del('lumoda_token');
-    SS.del('lumoda_sessions');
-  }
-  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-    if (autoLoginAllowed()) {
-      try {
-        const { data } = await window.LumodaSupabase.getSession();
-        const supaSession = data?.session;
-        if (supaSession?.user?.id) {
-          const { data: profile, error } = await window.LumodaSupabase.getProfile(supaSession.user.id);
-          if (error) throw error;
-          if (profile && profile.active !== false) {
-            currentUser = supabaseProfileToLocal(profile);
-            currentLocation = currentUser.location;
-            currentUser.token = registerSession(currentUser);
-            await syncSupabaseCache();
-            showApp();
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('Supabase startup failed:', err);
-      }
-    }
-  }
-
-  if (autoLoginAllowed()) {
-    const session = getCurrentSession();
-
-    if (session) {
-      const user = getUsers().find(u => u.username === session.username && u.active);
-
-      if (user) {
-        currentUser = { ...user, token: session.token };
-        currentLocation = currentUser.location;
-        showApp();
-        return;
-      }
-    }
-  }
-
-  // No valid session → show login
+  }catch(e){console.warn('Session restore failed',e);} 
   showAuthScreen();
-}
-
-// Run app after DOM loads
-window.addEventListener('DOMContentLoaded', bootApp);
+})();
