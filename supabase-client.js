@@ -112,6 +112,36 @@
     return (data || []).map(toLocalCustomer);
   }
 
+  async function loadInvoices() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb
+      .from('invoices')
+      .select('id, number, customer_name, customer_phone, customer_address, location, total, status, pay_method, momo_number, notes, created_by, created_by_name, created_at, deleted, deleted_at, deleted_by, invoice_items(id, name, qty, price)')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(row => ({
+      id: row.id,
+      number: row.number,
+      customerName: row.customer_name,
+      customerPhone: row.customer_phone,
+      customerAddress: row.customer_address,
+      location: row.location,
+      items: (row.invoice_items || []).map(it => ({ name: it.name, qty: it.qty, price: Number(it.price || 0), total: Number(it.qty || 0) * Number(it.price || 0) })),
+      total: Number(row.total || 0),
+      status: row.status,
+      payMethod: row.pay_method,
+      momoNumber: row.momo_number,
+      notes: row.notes || '',
+      createdBy: row.created_by,
+      createdByName: row.created_by_name || row.created_by,
+      createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+      deleted: !!row.deleted,
+      deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
+      deletedBy: row.deleted_by || null
+    }));
+  }
+
   async function loadProfiles() {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
@@ -164,6 +194,18 @@
     return sb.rpc('create_invoice', payload);
   }
 
+  async function createInvoiceNoStock(payload) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    return sb.rpc('create_invoice_no_stock', payload);
+  }
+
+  async function softDeleteInvoiceNoStock(invoiceId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    return sb.rpc('soft_delete_invoice_no_stock', { p_invoice_id: invoiceId });
+  }
+
   window.LumodaSupabase = {
     init,
     getClient,
@@ -174,10 +216,13 @@
     signOut,
     loadProducts,
     loadCustomers,
+    loadInvoices,
     loadProfiles,
     importProducts,
     logAudit,
     createInvoice,
+    createInvoiceNoStock,
+    softDeleteInvoiceNoStock,
     createStaffAccount,
     completePasswordChange,
     isConfigured

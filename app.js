@@ -286,12 +286,14 @@ async function resolveSupabaseLoginEmail(identifier) {
 
 async function syncSupabaseCache() {
   if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
-  const [products, customers] = await Promise.all([
+  const [products, customers, invoices] = await Promise.all([
     window.LumodaSupabase.loadProducts(),
-    window.LumodaSupabase.loadCustomers().catch(() => [])
+    window.LumodaSupabase.loadCustomers().catch(() => []),
+    window.LumodaSupabase.loadInvoices().catch(() => [])
   ]);
   LS.set('lumoda_products', products);
   LS.set('lumoda_customers', customers);
+  LS.set('lumoda_invoices', invoices);
 }
 
 async function doLogin() {
@@ -794,7 +796,7 @@ function calcTotal() {
   document.getElementById('invoice-total-display').textContent = 'Total: '+fmtGHS(total);
 }
 
-function createInvoice() {
+async function createInvoice() {
   const name   = document.getElementById('inv-cust-name').value.trim();
   const phone  = document.getElementById('inv-cust-phone').value.trim();
   const addr   = document.getElementById('inv-cust-addr').value.trim();
@@ -817,11 +819,45 @@ function createInvoice() {
   const number = String(seq).padStart(6,'0');
   LS.set('lumoda_invoice_seq', seq+1);
   const invoice = { id:'inv_'+Date.now(), number, customerName:name, customerPhone:phone, customerAddress:addr, location:loc, items, total, status, payMethod, momoNumber, notes, createdBy:currentUser.username, createdByName:currentUser.fullName, createdAt:Date.now(), deleted:false };
+
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const products = getProducts();
+      const p_items = items.map(it => {
+        const prod = products.find(p => p.name.toLowerCase() === it.name.toLowerCase());
+        if (!prod) throw new Error('Product not found: ' + it.name);
+        return { product_id: prod.id, qty: it.qty };
+      });
+      const res = await window.LumodaSupabase.createInvoiceNoStock({
+        p_customer_name: name,
+        p_location: loc,
+        p_items: p_items,
+        p_customer_phone: phone || null,
+        p_customer_address: addr || null,
+        p_status: status,
+        p_pay_method: payMethod || null,
+        p_momo_number: momoNumber || null,
+        p_notes: notes || null
+      });
+      if (res.error) throw res.error;
+      await syncSupabaseCache();
+      addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+      closeModal('invoice-modal'); toast('Invoice '+number+' created!');
+      currentLocation = 'All'; renderDashboard();
+      if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
+      try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
+      return;
+    } catch (err) {
+      toast(err.message || 'Could not create invoice', 'error');
+      return;
+    }
+  }
+
   const invoices = LS.get('lumoda_invoices')||[]; invoices.push(invoice); LS.set('lumoda_invoices', invoices);
   saveCustomerIfNew(name,phone,addr,loc);
   addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
   closeModal('invoice-modal'); toast('Invoice '+number+' created!');
-  renderDashboard();
+  currentLocation = 'All'; renderDashboard();
   if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
   try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
 }
@@ -843,9 +879,24 @@ function buildInvoiceHTML(inv) {
   return '<div style="border:2px solid var(--brand-brown);border-radius:var(--radius);overflow:hidden;margin-bottom:14px"><div style="background:var(--brand-brown);color:white;padding:8px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px"><div><div style="font-family:var(--font-serif);font-size:16px;font-weight:600;letter-spacing:.04em">LUMODA ENTERPRISE</div><div style="font-family:var(--font-serif);font-style:italic;font-size:11px;opacity:.8">The cook\'s helper</div><div style="font-size:10px;opacity:.7;margin-top:2px">Dealers in All Kinds of Kitchen Accessories</div></div><div style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.06em;white-space:nowrap;align-self:center">MAA LUCY\'S PLACE</div><div style="text-align:right;font-size:9px;opacity:.75;font-family:var(--font-mono)"><div>LOC 1: Alabar, Ghana Region</div><div>Shop No. OCL/ZR/GF/A20 &amp; A21</div><div>LOC 2: Morocco (K.O) Old Barbers Bldg GF 26</div><div>TEL: 0244369357 / 0546014044 / 0243563481</div></div></div><div style="background:var(--brand-red);color:white;padding:5px 14px;display:flex;justify-content:space-between;align-items:center"><div style="font-weight:700;font-size:13px;letter-spacing:.08em">INVOICE</div><div style="font-family:var(--font-mono);font-size:12px">Nr: <strong>'+escapeHtml(inv.number)+'</strong></div><div style="font-family:var(--font-mono);font-size:11px">'+fmtDate(inv.createdAt)+'</div></div><div style="padding:10px 14px;background:var(--white)"><div style="display:flex;gap:16px;font-size:13px;flex-wrap:wrap"><span style="color:var(--gray-400)">Name:</span><strong>'+escapeHtml(inv.customerName)+'</strong>'+(inv.customerPhone?'<span style="color:var(--gray-400)">Tel:</span><span>'+escapeHtml(inv.customerPhone)+'</span>':'')+'</div>'+(inv.customerAddress?'<div style="font-size:13px;margin-top:4px"><span style="color:var(--gray-400)">Address:</span> '+escapeHtml(inv.customerAddress)+'</div>':'')+'</div><table style="margin:0"><thead><tr style="background:var(--brand-red)"><th style="color:white;padding:8px 10px;font-size:11px;width:56px;text-align:center">QTY</th><th style="color:white;padding:8px 10px;font-size:11px">DESCRIPTION</th><th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:100px">@ (Unit)</th><th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:110px">AMOUNT GH₵</th></tr></thead><tbody>'+inv.items.map(item=>'<tr><td style="text-align:center;padding:9px 10px;font-weight:500">'+escapeHtml(item.qty)+'</td><td style="padding:9px 10px">'+escapeHtml(item.name)+'</td><td style="text-align:right;padding:9px 10px;font-family:var(--font-mono)">'+fmtGHS(item.price)+'</td><td style="text-align:right;padding:9px 10px;font-family:var(--font-mono);font-weight:600">'+fmtGHS(item.total)+'</td></tr>').join('')+blanks+'</tbody></table><div style="display:flex;justify-content:flex-end;border-top:2px solid var(--brand-brown);padding:10px 14px;gap:12px;align-items:center"><span style="font-size:13px;font-weight:500">Total GH₵</span><span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--brand-brown)">'+fmtGHS(inv.total)+'</span></div><div style="padding:8px 14px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;background:var(--gray-50)"><span style="font-size:11px;color:var(--gray-400);font-style:italic">Goods sold out are not returnable</span>'+statusBadge(inv.status)+(inv.payMethod?'&nbsp;&nbsp;<span class="badge badge-neutral">'+(inv.payMethod==='momo'?'📱 Mobile Money':'💵 Cash')+'</span>':'')+(inv.momoNumber?'&nbsp;<span style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">'+escapeHtml(inv.momoNumber)+'</span>':'')+'</div><div style="padding:10px 14px;display:flex;justify-content:space-between;font-size:11px;color:var(--gray-400)"><span>Customer\'s Signature: _______________</span><span>Manager\'s Signature: _______________</span></div></div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">Location: '+escapeHtml(inv.location)+' · By: '+escapeHtml(inv.createdByName||inv.createdBy)+' · '+fmtDateTime(inv.createdAt)+'</div>'+(inv.notes?'<div style="margin-top:10px;padding:10px;background:var(--gray-50);border-radius:var(--radius);font-size:13px;color:var(--gray-600)">'+escapeHtml(inv.notes)+'</div>':'')+(inv.deleted?'<div style="margin-top:10px;padding:8px 12px;background:#fee2e2;border-radius:var(--radius);font-size:12px;color:#991b1b">⚠ Deleted by '+escapeHtml(inv.deletedBy)+' on '+fmtDateTime(inv.deletedAt)+'</div>':'');
 }
 
-function deleteInvoice(id) {
+async function deleteInvoice(id) {
   if (!requireAdmin('delete invoices')) return;
   if (!confirm('Soft-delete this invoice? It remains in the audit trail.')) return;
+
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const res = await window.LumodaSupabase.softDeleteInvoiceNoStock(id);
+      if (res.error) throw res.error;
+      await syncSupabaseCache();
+      addAudit('Invoice Deleted', currentUser.fullName+' deleted invoice '+id+' [server]');
+      closeModal('view-invoice-modal'); toast('Invoice deleted.'); renderPage('invoices');
+      return;
+    } catch (err) {
+      toast(err.message || 'Could not delete invoice', 'error');
+      return;
+    }
+  }
+
   const invoices = LS.get('lumoda_invoices')||[];
   const idx = invoices.findIndex(i=>i.id===id); if(idx<0) return;
   const inv = invoices[idx];
