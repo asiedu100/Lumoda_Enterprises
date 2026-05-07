@@ -1003,11 +1003,141 @@ function renderLocationBreakdown(invoices){const locs=['Alabar','Morocco'];docum
 function renderTopProducts(invoices){const map={};invoices.forEach(inv=>inv.items.forEach(it=>{map[it.name]=(map[it.name]||0)+it.total;}));const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);document.getElementById('top-products').innerHTML=top.length?top.map(([n,t],i)=>'<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--gray-100)"><span>'+(i+1)+'. '+escapeHtml(n)+'</span><strong>'+fmtGHS(t)+'</strong></div>').join(''):'<div style="color:var(--gray-400);font-size:13px">No product sales yet</div>';}
 function renderMonthlyChart(invoices){const months=[];const now=new Date();for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const next=new Date(d.getFullYear(),d.getMonth()+1,1);const total=invoices.filter(inv=>{const t=asTimestamp(inv.createdAt);return t>=d&&t<next;}).reduce((s,inv)=>s+inv.total,0);months.push({label:d.toLocaleDateString('en',{month:'short'}),total});}const max=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/max*120);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total):'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');}
 
+
+
 // ============================================================
-// USER MANAGEMENT
+// SESSIONS PANEL
 // ============================================================
-function renderSessionsPanel(){const p=document.getElementById('active-sessions-panel');if(!p)return;if(!isAdmin()){p.style.display='none';return;}p.style.display='block';const sessions=getSessions();document.getElementById('active-sessions-count').textContent=sessions.length+' active';document.getElementById('active-sessions-list').innerHTML=sessions.length?sessions.map(s=>'<div style="display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--gray-50)"><span><span class="session-dot"></span>'+escapeHtml(s.fullName)+' <span class="mono">@'+escapeHtml(s.username)+'</span></span><span class="mono" style="color:var(--gray-400)">'+escapeHtml(s.location)+' · '+fmtAgo(s.lastActivity)+'</span></div>').join(''):'<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';}
-function renderUsers(){if(!isAdmin())return;renderSessionsPanel();const sessions=getSessions();const sc=document.getElementById('sessions-count-users');if(sc)sc.textContent=sessions.length+' active';const sl=document.getElementById('sessions-list-users');if(sl)sl.innerHTML=sessions.length?sessions.map(s=>'<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--gray-50)"><span><span class="session-dot"></span>'+escapeHtml(s.fullName)+' <span class="mono">@'+escapeHtml(s.username)+'</span></span><span class="mono" style="color:var(--gray-400)">'+escapeHtml(s.location)+' · '+fmtAgo(s.lastActivity)+'</span></div>').join(''):'<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';const users=getUsers();document.getElementById('users-body').innerHTML=users.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No local user cache. Create users in Supabase.</td></tr>':users.map(u=>{const status=!u.active?'<span class="badge badge-danger">Inactive</span>':u.mustChangePassword?'<span class="badge badge-warning">Must Change PW</span>':u.lockedUntil&&Date.now()<u.lockedUntil?'<span class="badge badge-danger">Locked</span>':'<span class="badge badge-success">Active</span>';let actions='';if(u.id!==currentUser.id){actions+='<button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\''+u.id+'\')">'+(u.active?'Deactivate':'Activate')+'</button>';if(u.lockedUntil&&Date.now()<u.lockedUntil)actions+='<button class="btn btn-secondary btn-sm" onclick="unlockUser(\''+u.id+'\')">Unlock</button>';}return '<tr><td><div style="font-weight:500">'+escapeHtml(u.fullName)+'</div></td><td><span class="mono">@'+escapeHtml(u.username)+'</span></td><td><span class="badge '+(u.role==='admin'?'badge-neutral':'badge-info')+'">'+escapeHtml(u.role)+'</span></td><td>'+escapeHtml(u.location)+'</td><td>'+status+'</td><td class="mono" style="color:var(--gray-400);font-size:12px">'+(u.lastLogin?fmtDateTime(u.lastLogin):'Never')+'</td><td style="display:flex;gap:6px;flex-wrap:wrap">'+actions+'</td></tr>';}).join('');}
+function renderSessionsPanel(){
+  const panel = document.getElementById('active-sessions-panel');
+  if (!panel) return;
+
+  if (!isAdmin()) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+
+  const sessions = getSessions();
+
+  const countEl = document.getElementById('active-sessions-count');
+  if (countEl) countEl.textContent = sessions.length + ' active';
+
+  const listEl = document.getElementById('active-sessions-list');
+
+  if (listEl) {
+    listEl.innerHTML = sessions.length
+      ? sessions.map(s =>
+          '<div style="display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--gray-50)">' +
+          '<span><span class="session-dot"></span>' +
+          escapeHtml(s.fullName || '') +
+          ' <span class="mono">@' +
+          escapeHtml(s.username || '') +
+          '</span></span>' +
+          '<span class="mono" style="color:var(--gray-400)">' +
+          escapeHtml(s.location || '') +
+          ' · ' +
+          fmtAgo(s.lastActivity) +
+          '</span></div>'
+        ).join('')
+      : '<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';
+  }
+}
+
+// ============================================================
+// USER MANAGEMENT (admin only)
+// ============================================================
+async function renderUsers() {
+  if(!isAdmin()){navigate('dashboard',null);return;}
+  renderSessionsPanel();
+  const sessions=getSessions();
+  let users=getUsers();
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const profiles = await window.LumodaSupabase.loadProfiles();
+      users = profiles.map(profile => ({
+        id: profile.id,
+        email: profile.email || '',
+        username: profile.username,
+        fullName: profile.full_name,
+        role: profile.role,
+        location: profile.location,
+        active: profile.active !== false,
+        mustChangePassword: !!profile.must_change_password,
+        lockedUntil: null,
+        lastLogin: null
+      }));
+    } catch (error) {
+      console.warn('Could not load Supabase profiles for the users page.', error);
+    }
+  }
+
+  document.getElementById('users-body').innerHTML = users.map(u => {
+  const online = sessions.some(s => s.username === u.username);
+  const locked = u.lockedUntil && Date.now() < u.lockedUntil;
+  const status = !u.active
+    ? '<span class="badge badge-danger">Inactive</span>'
+    : locked
+    ? '<span class="badge badge-warning">Locked</span>'
+    : u.mustChangePassword
+    ? '<span class="badge badge-info">Temp PW</span>'
+    : online
+    ? '<span class="badge badge-success">● Online</span>'
+    : '<span class="badge badge-neutral">Offline</span>';
+
+  let actions = '';
+
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    if (u.role !== 'admin') {
+      actions =
+        '<button class="btn btn-secondary btn-sm" onclick="toggleSupabaseUserActive(\'' + u.id + '\', ' + u.active + ')">' +
+        (u.active ? 'Deactivate' : 'Activate') +
+        '</button>';
+    } else {
+      actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>';
+    }
+  } else if (u.id === 'u_admin') {
+    actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>';
+  } else {
+    actions =
+      '<button class="btn btn-secondary btn-sm" onclick="resetUserPassword(\'' + u.id + '\')">Reset PW</button>' +
+      '<button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\'' + u.id + '\')">' +
+      (u.active ? 'Deactivate' : 'Activate') +
+      '</button>' +
+      (locked ? '<button class="btn btn-secondary btn-sm" onclick="unlockUser(\'' + u.id + '\')">Unlock</button>' : '');
+  }
+
+  return '<tr>' +
+    '<td><div style="font-weight:500">' + escapeHtml(u.fullName) + '</div></td>' +
+    '<td><span class="mono">@' + escapeHtml(u.username) + '</span></td>' +
+    '<td><span class="badge ' + (u.role === 'admin' ? 'badge-neutral' : 'badge-info') + '">' + escapeHtml(u.role) + '</span></td>' +
+    '<td>' + escapeHtml(u.location) + '</td>' +
+    '<td>' + status + '</td>' +
+    '<td class="mono" style="color:var(--gray-400);font-size:12px">' + (u.lastLogin ? fmtDateTime(u.lastLogin) : 'Never') + '</td>' +
+    '<td style="display:flex;gap:6px;flex-wrap:wrap">' + actions + '</td>' +
+  '</tr>';
+}).join('');
+}
+async function toggleSupabaseUserActive(userId, isActive){
+  if(!requireAdmin('manage users')) return;
+
+  const sb = window.LumodaSupabase.getClient();
+
+  const { error } = await sb
+    .from('profiles')
+    .update({ active: !isActive })
+    .eq('id', userId);
+
+  if (error) {
+    console.error(error);
+    toast('Could not update user status', 'error');
+    return;
+  }
+
+  toast(isActive ? 'User deactivated' : 'User activated');
+  renderUsers();
+}
 
 function openCreateUserModal(){
   if(!requireAdmin('create users'))return;
@@ -1037,7 +1167,7 @@ function saveNewUser(){
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     (async () => {
       const actionButton = document.querySelector('#create-user-modal .btn.btn-primary');
-      if (actionButton) { actionButton.disabled = true; actionButton.textContent = 'Creating.'; }
+      if (actionButton) { actionButton.disabled = true; actionButton.textContent = 'Creating...'; }
       try {
         const result = await window.LumodaSupabase.createStaffAccount({ email, username, fullName, role, location });
         addAudit('User Created', currentUser.fullName+' created Supabase account for "'+fullName+'" (@'+username+') ['+location+']');
@@ -1055,16 +1185,94 @@ function saveNewUser(){
     })();
     return;
   }
-
-  errEl.textContent = 'Supabase is not configured. Staff accounts must be created in Supabase, not in browser local storage.';
-  errEl.style.display = 'block';
-  return;
+  const users=getUsers();
+  if(users.find(u=>u.username===username)){errEl.textContent='Username already taken.';errEl.style.display='block';return;}
+  const tempPw='LM'+Math.random().toString(36).substring(2,8).toUpperCase();
+  users.push({id:'u_'+Date.now(),email,username,fullName,role,location,passwordHash:hashPw(tempPw),active:true,mustChangePassword:true,tempPasswordExpiry:Date.now()+TEMP_PW_EXPIRY_MS,failedLogins:0,lockedUntil:null,createdAt:Date.now(),createdBy:currentUser.username,lastLogin:null});
+  LS.set('lumoda_users',users);
+  addAudit('User Created',currentUser.fullName+' created account for "'+fullName+'" (@'+username+') ['+location+']');
+  closeModal('create-user-modal'); renderUsers();
+  showTempPasswordModal(fullName,username,tempPw,location);
+  const emailEl = document.getElementById('temp-email-display');
+  if (emailEl) emailEl.textContent = email;
 }
-function showTempPasswordModal(fullName,username,pw,loc){document.getElementById('temp-pw-display').innerHTML='<div style="text-align:center"><div style="font-size:14px;margin-bottom:8px"><strong>'+escapeHtml(fullName)+'</strong> <span class="mono">@'+escapeHtml(username)+'</span></div><div style="font-size:12px;color:var(--gray-400);margin-bottom:10px">'+escapeHtml(loc)+'</div><div style="background:var(--gray-50);border:1px solid var(--gray-200);border-radius:var(--radius);padding:14px;font-family:var(--font-mono);font-size:20px;font-weight:700;letter-spacing:.08em" id="temp-pw-text">'+escapeHtml(pw)+'</div><div style="font-size:12px;color:#854d0e;margin-top:10px">Give this temporary password to the staff member. It expires in 24 hours.</div><div id="temp-email-display" style="font-size:11px;color:var(--gray-400);margin-top:6px"></div></div>';openModal('temp-pw-modal');}
-function copyTempPw(){const txt=document.getElementById('temp-pw-text')?.textContent||'';try{navigator.clipboard.writeText(txt);toast('Temporary password copied');}catch{}}
-function toggleUserActive(id){const users=getUsers();const idx=users.findIndex(u=>u.id===id);if(idx<0)return;users[idx].active=!users[idx].active;LS.set('lumoda_users',users);addAudit('User Status Changed',currentUser.fullName+' '+(users[idx].active?'activated':'deactivated')+' @'+users[idx].username);renderUsers();}
-function unlockUser(id){const users=getUsers();const idx=users.findIndex(u=>u.id===id);if(idx<0)return;users[idx].lockedUntil=null;users[idx].failedLogins=0;LS.set('lumoda_users',users);addAudit('User Unlocked',currentUser.fullName+' unlocked @'+users[idx].username);renderUsers();}
 
+function showTempPasswordModal(fullName,username,tempPw,location){
+  _lastTempPw = tempPw;
+  document.getElementById('temp-pw-display').innerHTML =
+    '<div style="margin-bottom:14px;font-size:14px">Account created for <strong>'+escapeHtml(fullName)+'</strong></div>' +
+    '<div style="display:grid;grid-template-columns:auto 1fr;gap:9px 16px;font-size:13px;align-items:center;margin-bottom:16px">' +
+    '<span style="color:var(--gray-400)">Username</span><strong style="font-family:var(--font-mono)">'+escapeHtml(username)+'</strong>' +
+    '<span style="color:var(--gray-400)">Email</span><span id="temp-email-display">—</span>' +
+    '<span style="color:var(--gray-400)">Branch</span><span>'+escapeHtml(location)+'</span>' +
+    '<span style="color:var(--gray-400)">Temp Password</span>' +
+    '<div style="font-family:var(--font-mono);font-size:20px;font-weight:600;color:var(--brand-red);background:var(--gray-50);padding:8px 14px;border-radius:var(--radius);letter-spacing:.1em;border:1px dashed var(--gray-200)">'+escapeHtml(tempPw)+'</div>' +
+    '<span style="color:var(--gray-400)">Expires</span><span style="color:#f59e0b;font-size:12px">Within 24 hours</span>' +
+    '</div>' +
+    '<div style="background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);padding:10px 12px;font-size:12px;color:#854d0e">⚠ Share this directly with the staff member. They must change it on first login. This is the only time it is shown.</div>';
+  openModal('temp-pw-modal');
+}
+
+function resetUserPassword(userId){
+  if(!requireAdmin('reset passwords'))return;
+  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
+  const tempPw='LM'+Math.random().toString(36).substring(2,8).toUpperCase();
+  users[idx].passwordHash=hashPw(tempPw); users[idx].mustChangePassword=true; users[idx].tempPasswordExpiry=Date.now()+TEMP_PW_EXPIRY_MS; users[idx].failedLogins=0; users[idx].lockedUntil=null;
+  LS.set('lumoda_users',users);
+  addAudit('Password Reset',currentUser.fullName+' reset password for "'+users[idx].fullName+'"');
+  renderUsers(); showTempPasswordModal(users[idx].fullName,users[idx].username,tempPw,users[idx].location);
+}
+
+function toggleUserActive(userId){
+  if(!requireAdmin('manage users'))return;
+  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
+  users[idx].active=!users[idx].active;
+  LS.set('lumoda_users',users);
+  if(!users[idx].active){ LS.set('lumoda_sessions',getSessions().filter(s=>s.username!==users[idx].username)); }
+  addAudit(users[idx].active?'User Activated':'User Deactivated',currentUser.fullName+' '+(users[idx].active?'activated':'deactivated')+' "'+users[idx].fullName+'"');
+  toast(users[idx].fullName+' '+(users[idx].active?'activated':'deactivated'));
+  renderUsers();
+}
+
+function unlockUser(userId){
+  if(!requireAdmin('unlock accounts'))return;
+  const users=getUsers(); const idx=users.findIndex(u=>u.id===userId); if(idx<0)return;
+  users[idx].lockedUntil=null; users[idx].failedLogins=0;
+  LS.set('lumoda_users',users);
+  addAudit('Account Unlocked',currentUser.fullName+' unlocked "'+users[idx].fullName+'"');
+  toast(users[idx].fullName+' unlocked'); renderUsers();
+}
+
+function openChangeMyPassword(){
+  document.getElementById('my-new-pw').value=''; document.getElementById('my-confirm-pw').value='';
+  document.getElementById('my-pw-error').style.display='none';
+  openModal('my-password-modal');
+}
+function saveMyPassword(){
+  const np=document.getElementById('my-new-pw').value; const cp=document.getElementById('my-confirm-pw').value; const err=document.getElementById('my-pw-error'); err.style.display='none';
+  if(np.length<6){err.textContent='Minimum 6 characters.';err.style.display='block';return;}
+  if(np!==cp){err.textContent='Passwords do not match.';err.style.display='block';return;}
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    (async () => {
+      try {
+        const sb = window.LumodaSupabase.getClient();
+        const { error: updateError } = await sb.auth.updateUser({ password: np });
+        if (updateError) throw updateError;
+        addAudit('Password Changed', currentUser.fullName+' changed their password');
+        closeModal('my-password-modal'); toast('Password updated');
+      } catch (error) {
+        err.textContent = error.message || 'Could not update your password.';
+        err.style.display = 'block';
+      }
+    })();
+    return;
+  }
+  const users=getUsers(); const idx=users.findIndex(u=>u.id===currentUser.id);
+  users[idx].passwordHash=hashPw(np); users[idx].mustChangePassword=false; users[idx].tempPasswordExpiry=null;
+  LS.set('lumoda_users',users); currentUser={...users[idx]};
+  addAudit('Password Changed',currentUser.fullName+' changed their password');
+  closeModal('my-password-modal'); toast('Password updated');
+}
 // ============================================================
 // AUDIT LOG
 // ============================================================
