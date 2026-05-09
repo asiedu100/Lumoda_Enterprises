@@ -321,34 +321,58 @@
           </select>
         </div>
       </div>
-      <!-- PAYMENT METHOD — shown only when Paid is selected -->
-      <div id="payment-method-row" style="display:none;margin-bottom:14px">
-        <label class="form-label">Payment Method *</label>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
-          <div class="pm-btn" id="pm-cash" onclick="selectPayMethod('cash')">💵 Cash</div>
-          <div class="pm-btn" id="pm-momo" onclick="selectPayMethod('momo')">📱 Mobile Money</div>
-        </div>
-        <div id="momo-number-row" style="display:none;margin-top:10px">
-          <label class="form-label">MoMo Number (optional)</label>
-          <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
-        </div>
-      </div>
-      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="inv-cust-addr" placeholder="Optional"></div>
-      <label class="form-label">Line Items *</label>
-      <div class="line-items-wrap">
-        <div class="li-header"><span>Product</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span></div>
-        <div id="line-items-body"></div>
-      </div>
-      <button class="btn btn-secondary btn-sm" onclick="addLineItem()" style="margin-bottom:12px">+ Add Item</button>
-      <div class="inv-total" id="invoice-total-display">Total: GH₵ 0.00</div>
-      <div class="form-group" style="margin-top:10px"><label class="form-label">Notes</label><textarea class="form-textarea" id="inv-notes" placeholder="Optional…"></textarea></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
-      <div class="modal-footer-right"><button class="btn btn-primary" onclick="createInvoice()">Create Invoice</button></div>
-    </div>
+     <!-- PAYMENT METHOD — shown only when Paid is selected -->
+<div id="payment-method-row" style="display:none;margin-bottom:14px">
+  <label class="form-label">Payment Method *</label>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+    <div class="pm-btn" id="pm-cash" onclick="selectPayMethod('cash')">💵 Cash</div>
+    <div class="pm-btn" id="pm-momo" onclick="selectPayMethod('momo')">📱 Mobile Money</div>
+  </div>
+  <div id="momo-number-row" style="display:none;margin-top:10px">
+    <label class="form-label">MoMo Number (optional)</label>
+    <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
   </div>
 </div>
+
+<div class="form-group">
+  <label class="form-label">Address</label>
+  <input class="form-input" id="inv-cust-addr" placeholder="Optional">
+</div>
+
+<label class="form-label">Line Items *</label>
+<div class="line-items-wrap">
+  <div class="li-header">
+    <span>Product</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+  </div>
+  <div id="line-items-body"></div>
+</div>
+
+<button class="btn btn-secondary btn-sm" onclick="addLineItem()" style="margin-bottom:12px">+ Add Item</button>
+
+<div class="form-group" style="margin-bottom:12px">
+  <label class="form-label">Discount (GH₵)</label>
+  <input class="form-input" id="inv-discount" type="number" min="0" value="0" placeholder="0.00" oninput="calcTotal()">
+</div>
+
+<div class="inv-total" id="invoice-total-display">Total: GH₵ 0.00</div>
+
+<div class="form-group" style="margin-top:10px">
+  <label class="form-label">Notes</label>
+  <textarea class="form-textarea" id="inv-notes" placeholder="Optional…"></textarea>
+</div>
+
+</div>
+
+<div class="modal-footer">
+  <button class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
+  <div class="modal-footer-right">
+    <button class="btn btn-primary" onclick="createInvoice()">Create Invoice</button>
+  </div>
+</div>
+
+</div>
+</div>
+
 
 <!-- View Invoice -->
 <div class="modal-overlay" id="view-invoice-modal">

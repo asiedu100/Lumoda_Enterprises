@@ -111,18 +111,27 @@
   }
 
   async function loadInvoices() {
-    const sb = getClient();
-    if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb
-      .from('invoices')
-      .select(`
-        id, number, customer_name, customer_phone, customer_address,
-        location, total, status, pay_method, momo_number, notes,
-        amount_paid, balance, partial_method, partial_momo_number,
-        created_by, created_at, deleted, deleted_at, deleted_by,
-        invoice_items(id, name, qty, price),
-        invoice_payments(id, amount, method, momo_number, note, created_by, created_at)
-      `)
+  const sb = getClient();
+  if (!sb) throw new Error('Supabase is not configured.');
+  const { data, error } = await sb
+    .from('invoices')
+    .select(`
+  id, number, customer_name, customer_phone, customer_address,
+  location, subtotal, discount, total, status, pay_method, momo_number, notes,
+  amount_paid, balance, partial_method, partial_momo_number,
+  created_by, created_at, deleted, deleted_at, deleted_by,
+
+  creator:profiles!invoices_created_by_fkey (
+    full_name,
+    username
+  ),
+
+  invoice_items(id, name, qty, price),
+
+  invoice_payments(
+    id, amount, method, momo_number, note, created_by, created_at
+  )
+`)
       .order('created_at', { ascending: false });
     if (error) throw error;
     return (data || []).map(row => ({
@@ -138,6 +147,8 @@
         price: Number(it.price || 0),
         total: Number(it.qty || 0) * Number(it.price || 0)
       })),
+      subtotal: Number(row.subtotal || row.total || 0),
+      discount: Number(row.discount || 0),
       total:           Number(row.total || 0),
       status:          row.status,
       payMethod:       row.pay_method   || '',
@@ -157,7 +168,7 @@
       })),
       notes:           row.notes || '',
       createdBy:       row.created_by,
-      createdByName:   row.created_by,
+      createdByName:   row.created_by ? (row.creator ? row.creator.full_name || row.creator.username || '' : '') : '',
       createdAt:       row.created_at ? new Date(row.created_at).getTime() : Date.now(),
       deleted:         !!row.deleted,
       deletedAt:       row.deleted_at  ? new Date(row.deleted_at).getTime()  : null,
@@ -180,32 +191,32 @@
   // Items: [{ product_id, name, qty, price }]
   // product_id is OPTIONAL — server looks up by name if null
   async function createInvoiceNoStock(payload) {
-    const sb = getClient();
-    if (!sb) throw new Error('Supabase is not configured.');
+  const sb = getClient();
+  if (!sb) throw new Error('Supabase is not configured.');
 
-    // Build items for the RPC — send name+price so server can match
-    // even if product_id is null (product typed freely)
-    const rpcItems = (payload.p_items || []).map(it => ({
-      product_id: it.product_id || null,
-      name:       String(it.name  || ''),
-      qty:        Number(it.qty   || 0),
-      price:      Number(it.price || 0)
-    }));
+  const rpcItems = (payload.p_items || []).map(it => ({
+    product_id: it.product_id || null,
+    name: String(it.name || ''),
+    qty: Number(it.qty || 0),
+    price: Number(it.price || 0)
+  }));
 
-    return sb.rpc('create_invoice_no_stock', {
-      p_customer_name:    payload.p_customer_name,
-      p_location:         payload.p_location,
-      p_items:            rpcItems,
-      p_customer_phone:   payload.p_customer_phone   || null,
-      p_customer_address: payload.p_customer_address || null,
-      p_status:           payload.p_status           || 'pending',
-      p_pay_method:       payload.p_pay_method        || null,
-      p_momo_number:      payload.p_momo_number       || null,
-      p_notes:            payload.p_notes             || null,
-      p_amount_paid:      payload.p_amount_paid       || 0,
-      p_partial_method:   payload.p_partial_method    || null,
-      p_partial_momo:     payload.p_partial_momo      || null
-    });
+  return sb.rpc('create_invoice_no_stock', {
+    p_customer_name: payload.p_customer_name,
+    p_location: payload.p_location,
+    p_items: rpcItems,
+    p_customer_phone: payload.p_customer_phone || null,
+    p_customer_address: payload.p_customer_address || null,
+    p_status: payload.p_status || 'pending',
+    p_pay_method: payload.p_pay_method || null,
+    p_momo_number: payload.p_momo_number || null,
+    p_notes: payload.p_notes || null,
+    p_amount_paid: payload.p_amount_paid || 0,
+    p_discount: payload.p_discount || 0,
+    p_partial_method: payload.p_partial_method || null,
+    p_partial_momo: payload.p_partial_momo || null
+  });
+  
   }
 
   async function softDeleteInvoiceNoStock(invoiceId) {
