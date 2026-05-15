@@ -123,12 +123,12 @@ tr:hover td{background:var(--gray-50)}
 /* INVOICE LINE ITEMS */
 .line-items-wrap{border:1px solid var(--gray-100);border-radius:var(--radius);overflow:hidden;margin-bottom:10px}
 .li-header{display:grid;grid-template-columns:2fr 70px 120px 30px;gap:5px;padding:6px 10px;background:var(--gray-50);font-size:10px;font-weight:500;color:var(--gray-400);text-transform:uppercase;letter-spacing:.06em;font-family:var(--font-mono)}
-.li-row{display:grid;grid-template-columns:2fr 70px 120px 30px;gap:5px;padding:6px 10px;border-top:1px solid var(--gray-100);align-items:center}
+.li-row,.line-item-row{display:grid;grid-template-columns:2fr 70px 120px 30px;gap:5px;padding:6px 10px;border-top:1px solid var(--gray-100);align-items:center}
 .li-input{padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;transition:border .15s}
 .li-input:focus{border-color:var(--brand-brown)}
 .li-input[readonly]{background:var(--gray-50);color:var(--gray-400);cursor:not-allowed}
-.remove-btn{background:transparent;border:none;cursor:pointer;color:var(--gray-400);font-size:17px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px}
-.remove-btn:hover{color:#dc2626;background:#fee2e2}
+.remove-btn,.remove-item{background:transparent;border:none;cursor:pointer;color:var(--gray-400);font-size:17px;width:26px;height:26px;display:flex;align-items:center;justify-content:center;border-radius:4px}
+.remove-btn:hover,.remove-item:hover{color:#dc2626;background:#fee2e2}
 .inv-total{text-align:right;padding:9px 12px;border-top:1px solid var(--gray-100);font-weight:600;font-size:14px;color:var(--brand-brown)}
 
 /* PAYMENT METHOD SELECTOR */
@@ -145,8 +145,12 @@ tr:hover td{background:var(--gray-50)}
 /* LOW STOCK */
 .ls-item{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--gray-50);gap:12px}
 .ls-item:last-child{border-bottom:none}
-.stock-bar-bg{height:4px;background:var(--gray-100);border-radius:2px;overflow:hidden;margin-top:4px}
-.stock-bar-fill{height:100%;border-radius:2px}
+.stock-bar-bg,.stock-bar-wrap{height:4px;background:var(--gray-100);border-radius:2px;overflow:hidden;margin-top:4px}
+.stock-bar-fill,.stock-bar{height:100%;border-radius:2px;background:var(--brand-yellow)}
+.stock-bar.critical{background:#dc2626}
+.stock-bar.low{background:#f59e0b}
+.low-stock-item{display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--gray-50);gap:12px}
+.low-stock-item:last-child{border-bottom:none}
 
 /* REPORTS */
 .report-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
@@ -173,8 +177,53 @@ tr:hover td{background:var(--gray-50)}
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--gray-200);border-radius:2px}
 
 /* PRINT */
-#print-area{display:none}
-@media print{
-  body>*{display:none!important}
-  #print-area{display:block!important;font-family:Arial,sans-serif;font-size:12px;color:#000;padding:16px}
+#print-area {
+  display: none;
+}
+
+@media print {
+  body.printing-warehouse-req * {
+    visibility: hidden !important;
+  }
+
+  body.printing-warehouse-req #warehouse-view-body,
+  body.printing-warehouse-req #warehouse-view-body * {
+    visibility: visible !important;
+  }
+
+  body.printing-warehouse-req #warehouse-view-body {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+    padding: 24px !important;
+    background: white !important;
+    color: black !important;
+  }
+}
+
+/* WAREHOUSE MOBILE OPTIMIZATION */
+@media (max-width: 768px) {
+  #warehouse-body .stats-grid {
+    grid-template-columns: 1fr 1fr !important;
+  }
+
+  #warehouse-body .card {
+    overflow-x: auto;
+  }
+
+  #warehouse-body table {
+    min-width: 760px;
+  }
+
+  #warehouse-stockout-modal .modal,
+  #warehouse-adjustment-modal .modal,
+  #warehouse-csv-modal .modal {
+    width: 96vw;
+    max-height: 90vh;
+  }
+
+  #warehouse-requisition-items-body input {
+    min-width: 110px;
+  }
 }

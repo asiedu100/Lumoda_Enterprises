@@ -1,6 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="icon" type="image/jpeg" href="/lumo.jpeg">
+<link rel="apple-touch-icon" href="/lumo.jpeg">
+
+<meta property="og:title" content="Lumoda Enterprise">
+<meta property="og:description" content="Inventory, Sales & Warehouse Management System">
+<meta property="og:image" content="https://lumoda.netlify.app/lumo.jpeg">
+<meta property="og:url" content="https://lumoda.netlify.app">
+<meta property="og:type" content="website">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LUMODA ENTERPRISE</title>
@@ -125,6 +133,13 @@
       <div class="nav-item" data-page="products" onclick="navigate('products',this)">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>Products
       </div>
+      <div class="nav-item" id="nav-warehouse" data-page="warehouse" onclick="navigate('warehouse',this)">
+  <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M1 3l7-3 7 3v10l-7 3-7-3V3zm2 1.2v7.6l5 2.1V6.3L3 4.2zm10 0l-5 2.1v7.6l5-2.1V4.2z"/>
+  </svg>
+  Warehouse
+</div>
+
       <div class="nav-item" data-page="stockhistory" onclick="navigate('stockhistory',this)">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2h14v2H1zm1 3h12l-1 9H3L2 5zm4 2v5h1V7H6zm3 0v5h1V7H9z"/></svg>Stock History
       </div>
@@ -237,6 +252,27 @@
           <div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Price</th><th>Alabar Stock</th><th>Morocco Stock</th><th>Status</th><th>Reorder At</th><th></th></tr></thead><tbody id="products-body"></tbody></table></div>
         </div>
       </div>
+
+      <!-- WAREHOUSE -->
+<div class="page" id="page-warehouse">
+  <div class="card">
+    <div class="card-header">
+      <h2>Warehouse Management</h2>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="openWarehouseStockInModal()">
+        + Stock In
+      </button>
+      <button class="btn btn-secondary" onclick="openWarehouseStockOutModal()">
+        Stock Out
+      </button>
+    </div>
+
+    <div id="warehouse-body" style="padding:20px">
+      Warehouse loading...
+    </div>
+  </div>
+</div>
+
 
       <!-- STOCK HISTORY -->
       <div class="page" id="page-stockhistory">
@@ -464,7 +500,7 @@
       <div class="form-group"><label class="form-label">Username *</label><input class="form-input" id="new-user-username" placeholder="e.g. john_agyei" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9_]/g,'')"><div class="pw-hint" style="margin-top:4px">Letters, numbers, underscore only.</div></div>
       <div class="form-group"><label class="form-label">Email *</label><input class="form-input" type="email" id="new-user-email" placeholder="e.g. john@example.com" autocomplete="email"></div>
       <div class="form-grid">
-        <div class="form-group"><label class="form-label">Role</label><select class="form-select" id="new-user-role" onchange="onNewUserRoleChange()"><option value="staff">Staff</option><option value="admin">Admin</option></select></div>
+        <div class="form-group"><label class="form-label">Role</label><select class="form-select" id="new-user-role" onchange="onNewUserRoleChange()"><option value="staff">Staff</option><option value="warehouse_manager">Warehouse Manager</option><option value="admin">Admin</option></select></div>
         <div class="form-group" id="new-user-location-row"><label class="form-label">Branch *</label><select class="form-select" id="new-user-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
       </div>
       <div class="form-error" id="create-user-error"></div>
@@ -531,9 +567,461 @@
   </div>
 </div>
 
+<!-- Warehouse Opening Balance Modal -->
+<div class="modal-overlay" id="warehouse-opening-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Opening Balance</div>
+      <button class="modal-close" onclick="closeModal('warehouse-opening-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Description of Goods *</label>
+        <input class="form-input" id="wh-ob-description" placeholder="e.g. Blender cartons">
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Item Code</label>
+          <input class="form-input" id="wh-ob-code" placeholder="Optional">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Opening Cartons *</label>
+          <input class="form-input" type="number" id="wh-ob-cartons" min="1" placeholder="0">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="wh-ob-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-opening-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseOpeningBalance()">Save Opening Balance</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse Stock In Modal -->
+<div class="modal-overlay" id="warehouse-stockin-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Stock In</div>
+      <button class="modal-close" onclick="closeModal('warehouse-stockin-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Supplier Name *</label>
+        <input class="form-input" id="wh-in-supplier" placeholder="Supplier name">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Description of Goods *</label>
+        <input class="form-input" id="wh-in-description" placeholder="e.g. Blender cartons">
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Item Code</label>
+          <input class="form-input" id="wh-in-code" placeholder="Optional">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Quantity in Cartons *</label>
+          <input class="form-input" type="number" id="wh-in-cartons" min="1" placeholder="0">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="wh-in-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-stockin-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseStockIn()">Save Stock In</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="warehouse-adjustment-modal">
+  <div class="modal modal-md">
+
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Adjustment</div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-adjustment-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label">Item *</label>
+
+          <input
+            class="form-input"
+            list="warehouse-adjustment-items"
+            id="wh-adjust-item"
+            placeholder="Type item name">
+
+          <datalist id="warehouse-adjustment-items">
+          </datalist>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Adjustment Type *</label>
+
+          <select
+            class="form-select"
+            id="wh-adjust-type">
+
+            <option value="add">Add Stock</option>
+            <option value="remove">Remove Stock</option>
+
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Cartons *</label>
+
+          <input
+            class="form-input"
+            type="number"
+            min="1"
+            id="wh-adjust-cartons"
+            placeholder="0">
+        </div>
+
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Reason *</label>
+
+        <textarea
+          class="form-textarea"
+          id="wh-adjust-reason"
+          placeholder="Explain why adjustment is being made"></textarea>
+      </div>
+
+    </div>
+
+    <div class="modal-footer">
+
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-adjustment-modal')">
+
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+
+        <button
+          class="btn btn-warning"
+          onclick="saveWarehouseAdjustment()">
+
+          Save Adjustment
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- Warehouse Stock Out / Requisition Modal -->
+<div class="modal-overlay" id="warehouse-stockout-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">
+        Warehouse Stock Out / Requisition
+      </div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-stockout-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- Top Form -->
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label">Issue To *</label>
+
+          <select class="form-select" id="wh-out-issue-to">
+            <option value="Alabar">Alabar Branch</option>
+            <option value="Morocco">Morocco Branch</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Storekeeper *</label>
+
+          <input
+            class="form-input"
+            id="wh-out-storekeeper"
+            placeholder="Storekeeper name"
+            readonly>
+        </div>
+
+      </div>
+      <!-- END form-grid -->
+
+      <!-- Notes -->
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+
+        <textarea
+          class="form-textarea"
+          id="wh-out-notes"
+          placeholder="Optional notes"></textarea>
+      </div>
+
+      <!-- Requisition Header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
+
+        <label class="form-label" style="margin:0">
+          Requisition Items *
+        </label>
+
+        <button
+          class="btn btn-secondary btn-sm"
+          onclick="addWarehouseRequisitionRow()">
+          + Add Item
+        </button>
+      </div>
+
+      <!-- Requisition Table -->
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+
+        <table style="margin:0">
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description of Goods</th>
+              <th>Cartons</th>
+              <th>Qty Supplied</th>
+              <th>Unit Price</th>
+              <th></th>
+            </tr>
+          </thead>
+
+          <tbody id="warehouse-requisition-items-body"></tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="modal-footer">
+
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-stockout-modal')">
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+        <button
+          class="btn btn-primary"
+          onclick="saveWarehouseStockOut()">
+          Save Requisition
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse View Requisition Modal -->
+<div class="modal-overlay" id="warehouse-view-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title" id="warehouse-view-title">Warehouse Requisition</div>
+      <button class="modal-close" onclick="closeModal('warehouse-view-modal')">×</button>
+    </div>
+
+    <div class="modal-body" id="warehouse-view-body"></div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-view-modal')">Close</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="printWarehouseRequisition()">Print</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse Product Modal -->
+<div class="modal-overlay" id="warehouse-product-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Add Warehouse Product</div>
+      <button class="modal-close" onclick="closeModal('warehouse-product-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Item Code</label>
+        <input class="form-input" id="wh-prod-code" placeholder="e.g. BL001">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Description / Product Name *</label>
+        <input class="form-input" id="wh-prod-name" placeholder="e.g. Blender">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <input class="form-input" id="wh-prod-category" placeholder="e.g. Appliances">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Reorder Level</label>
+        <input class="form-input" type="number" id="wh-prod-reorder" placeholder="e.g. 10">
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-product-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseProduct()">Save Product</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Supplier Modal -->
+<div class="modal-overlay" id="supplier-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Add Supplier</div>
+      <button class="modal-close" onclick="closeModal('supplier-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Supplier Name *</label>
+        <input class="form-input" id="supplier-name" placeholder="e.g. Adom Trading">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Phone</label>
+        <input class="form-input" id="supplier-phone" placeholder="0244123456">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Location</label>
+        <input class="form-input" id="supplier-location" placeholder="e.g. Kumasi">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="supplier-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('supplier-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveSupplier()">Save Supplier</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse CSV Import Modal -->
+<div class="modal-overlay" id="warehouse-csv-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Import Warehouse CSV</div>
+      <button class="modal-close" onclick="closeModal('warehouse-csv-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">CSV File *</label>
+        <input class="form-input" type="file" id="warehouse-csv-file" accept=".csv">
+      </div>
+
+      <div class="pw-hint">
+        Required columns: item_code, item_name, cartons, reorder_level, unit_price
+      </div>
+
+      <pre style="margin-top:12px;background:var(--gray-50);padding:10px;border-radius:var(--radius);font-size:11px;overflow:auto">item_code,item_name,cartons,reorder_level,unit_price
+BL001,Blender,50,10,120
+KT001,Kettle,30,10,85</pre>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-csv-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="importWarehouseCsv()">Import CSV</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse View Requisition Modal -->
+<div class="modal-overlay" id="warehouse-view-modal">
+  <div class="modal" style="max-width:900px">
+
+    <div class="modal-header">
+      <div class="modal-title">
+        Warehouse Requisition
+      </div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-view-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body" id="warehouse-view-body">
+    </div>
+
+    <div class="modal-footer">
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-view-modal')">
+        Close
+      </button>
+
+      <button
+  class="btn btn-primary"
+  onclick="printWarehouseReq()">
+  Print
+</button>
+
+  </div>
+</div>
+
 <script src="supabase-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js"></script>
 <script src="app.js"></script>
+<script src="warehouse.js"></script>
 </body>
 </html>
