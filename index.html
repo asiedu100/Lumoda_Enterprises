@@ -624,7 +624,14 @@
 
       <div class="form-group">
         <label class="form-label">Description of Goods *</label>
-        <input class="form-input" id="wh-in-description" placeholder="e.g. Blender cartons">
+        <input
+  class="form-input"
+  id="wh-in-description"
+  list="warehouse-stockin-items"
+  placeholder="Search product name"
+  oninput="selectWarehouseStockInItem(this.value)">
+
+<datalist id="warehouse-stockin-items"></datalist>
       </div>
 
       <div class="form-grid">
@@ -821,9 +828,7 @@
             <tr>
               <th>Item Code</th>
               <th>Description of Goods</th>
-              <th>Cartons</th>
-              <th>Qty Supplied</th>
-              <th>Unit Price</th>
+              <th>Cartons Supplied</th>
               <th></th>
             </tr>
           </thead>
@@ -854,24 +859,6 @@
   </div>
 </div>
 
-<!-- Warehouse View Requisition Modal -->
-<div class="modal-overlay" id="warehouse-view-modal">
-  <div class="modal">
-    <div class="modal-header">
-      <div class="modal-title" id="warehouse-view-title">Warehouse Requisition</div>
-      <button class="modal-close" onclick="closeModal('warehouse-view-modal')">×</button>
-    </div>
-
-    <div class="modal-body" id="warehouse-view-body"></div>
-
-    <div class="modal-footer">
-      <button class="btn btn-secondary" onclick="closeModal('warehouse-view-modal')">Close</button>
-      <div class="modal-footer-right">
-        <button class="btn btn-primary" onclick="printWarehouseRequisition()">Print</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- Warehouse Product Modal -->
 <div class="modal-overlay" id="warehouse-product-modal">
@@ -983,13 +970,16 @@ KT001,Kettle,30,10,85</pre>
   </div>
 </div>
 
-<!-- Warehouse View Requisition Modal -->
+
+  </div>
+</div>
+<!-- Warehouse View Movement Modal -->
 <div class="modal-overlay" id="warehouse-view-modal">
   <div class="modal" style="max-width:900px">
 
     <div class="modal-header">
-      <div class="modal-title">
-        Warehouse Requisition
+      <div class="modal-title" id="warehouse-view-title">
+        Warehouse Movement
       </div>
 
       <button
@@ -999,8 +989,7 @@ KT001,Kettle,30,10,85</pre>
       </button>
     </div>
 
-    <div class="modal-body" id="warehouse-view-body">
-    </div>
+    <div class="modal-body" id="warehouse-view-body"></div>
 
     <div class="modal-footer">
       <button
@@ -1009,11 +998,14 @@ KT001,Kettle,30,10,85</pre>
         Close
       </button>
 
-      <button
-  class="btn btn-primary"
-  onclick="printWarehouseReq()">
-  Print
-</button>
+      <div class="modal-footer-right">
+        <button
+          class="btn btn-primary"
+          onclick="printWarehouseReq()">
+          Print
+        </button>
+      </div>
+    </div>
 
   </div>
 </div>

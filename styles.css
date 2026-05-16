@@ -182,23 +182,16 @@ tr:hover td{background:var(--gray-50)}
 }
 
 @media print {
-  body.printing-warehouse-req * {
-    visibility: hidden !important;
+  body > * {
+    display: none !important;
   }
 
-  body.printing-warehouse-req #warehouse-view-body,
-  body.printing-warehouse-req #warehouse-view-body * {
-    visibility: visible !important;
-  }
-
-  body.printing-warehouse-req #warehouse-view-body {
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
-    width: 100% !important;
-    padding: 24px !important;
-    background: white !important;
-    color: black !important;
+  #print-area {
+    display: block !important;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    color: #000;
+    padding: 16px;
   }
 }
 

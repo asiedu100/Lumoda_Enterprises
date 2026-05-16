@@ -963,7 +963,7 @@ function buildInvoiceHTML(inv) {
         '<div style="font-size:10px;opacity:.7;margin-top:2px">Dealers in All Kinds of Kitchen Accessories</div>' +
       '</div>' +
 
-      '<div style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.06em;white-space:nowrap;align-self:center">MAA LUCY\\\'S PLACE</div>' +
+      '<div style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.06em;white-space:nowrap;align-self:center">MAA LUCY\'S PLACE</div>' +
 
       '<div style="text-align:right;font-size:9px;opacity:.75;font-family:var(--font-mono)">' +
         '<div>LOC 1: Alabar, Ghana Region</div>' +
@@ -997,8 +997,8 @@ function buildInvoiceHTML(inv) {
         '<tr style="background:var(--brand-red)">' +
           '<th style="color:white;padding:8px 10px;font-size:11px;width:56px;text-align:center">QTY</th>' +
           '<th style="color:white;padding:8px 10px;font-size:11px">DESCRIPTION</th>' +
-          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:100px">@ (Unit)</th>' +
-          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:110px">AMOUNT GH₵</th>' +
+          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:100px"> UNIT PRICE </th>' +
+          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:110px">AMOUNT </th>' +
         '</tr>' +
       '</thead>' +
 
@@ -1007,8 +1007,8 @@ function buildInvoiceHTML(inv) {
           '<tr>' +
             '<td style="text-align:center;padding:9px 10px;font-weight:500">'+escapeHtml(item.qty)+'</td>' +
             '<td style="padding:9px 10px">'+escapeHtml(item.name)+'</td>' +
-            '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono)">'+fmtGHS(item.price)+'</td>' +
-            '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono);font-weight:600">'+fmtGHS(item.total)+'</td>' +
+            '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono)">'+Number(item.price || 0).toFixed(2)+'</td>' +
+            '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono);font-weight:600">'+Number(item.total || 0).toFixed(2)+'</td>' +
           '</tr>'
         ).join('') +
         blanks +
@@ -1019,7 +1019,7 @@ function buildInvoiceHTML(inv) {
     '<div style="display:flex;flex-direction:column;align-items:flex-end;border-top:2px solid var(--brand-brown);padding:10px 14px;gap:6px">' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Subtotal:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.subtotal || inv.total)+'</span></div>' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Discount:</span> <span style="font-family:var(--font-mono)">-'+fmtGHS(inv.discount || 0)+'</span></div>' +
-      '<div><span style="font-size:13px;font-weight:500">Total GH₵</span> <span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--brand-brown)">'+fmtGHS(inv.total)+'</span></div>' +
+      '<div><span style="font-size:13px;font-weight:500">Total </span> <span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--brand-brown)">'+fmtGHS(inv.total)+'</span></div>' +
     '</div>' +
 
     '<div style="padding:8px 14px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;background:var(--gray-50)">' +
@@ -1033,10 +1033,7 @@ function buildInvoiceHTML(inv) {
         : '') +
     '</div>' +
 
-    '<div style="padding:10px 14px;display:flex;justify-content:space-between;font-size:11px;color:var(--gray-400)">' +
-      '<span>Customer\\\'s Signature: _______________</span>' +
-      '<span>Manager\\\'s Signature: _______________</span>' +
-    '</div>' +
+    
 
     '<div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">' +
       'Location: '+escapeHtml(inv.location)+' · By: '+escapeHtml(inv.createdByName || 'Unknown')+' · '+fmtDateTime(inv.createdAt) +
@@ -1086,9 +1083,56 @@ function copyInvoiceText() {
 }
 
 function generateInvoiceText(inv) {
-  const sep = '─'.repeat(52);
-  const lines = inv.items.map(item=>String(item.qty).padEnd(5)+' '+item.name.substring(0,24).padEnd(24)+' '+fmtGHS(item.price).padStart(10)+'  '+fmtGHS(item.total).padStart(11)).join('\n');
-  return '━'.repeat(52)+'\n  LUMODA ENTERPRISE            MAA LUCY\'S PLACE\n  "The cook\'s helper"\n  Dealers in All Kinds of Kitchen Accessories\n'+'━'.repeat(52)+'\n  LOCATION 1: Alabar, Ghana Region\n             Shop No. OCL/ZR/GF/A20 and A21\n  LOCATION 2: Morocco (K.O) OLD Barbers Building\n             Shop No. GF 26\n  TEL: 0244369357 / 0546014044 / 0243563481\n'+'━'.repeat(52)+'\n\nINVOICE                              Nr: '+inv.number+'\nDate: '+fmtDate(inv.createdAt)+'\n\nName:    '+inv.customerName+(inv.customerPhone?'\nPhone:   '+inv.customerPhone:'')+(inv.customerAddress?'\nAddress: '+inv.customerAddress:'')+'\n\n'+sep+'\nQTY   DESCRIPTION               @ UNIT        AMOUNT GH₵\n'+sep+'\n'+lines+'\n'+sep+'\n                               Total GH₵:  '+fmtGHS(inv.total)+'\n\nStatus: '+inv.status.toUpperCase()+(inv.payMethod?'\\nPayment: '+(inv.payMethod==='momo'?'Mobile Money'+(inv.momoNumber?' ('+inv.momoNumber+')':''):'Cash'):'')+(inv.notes?'\nNotes: '+inv.notes:'')+'\n\nGoods sold out are not returnable.\n\nCustomer\'s Signature: ___________  Manager\'s Signature: ___________';
+  const sep = '─'.repeat(58);
+
+  const rows = inv.items.map(item => {
+    const qty = String(item.qty || '').padEnd(5);
+    const name = String(item.name || '').substring(0, 28).padEnd(28);
+    const unit = Number(item.price || 0).toFixed(2).padStart(10);
+    const amount = Number(item.total || 0).toFixed(2).padStart(11);
+
+    return `${qty} ${name} ${unit} ${amount}`;
+  }).join('\n');
+
+  return `
+${'━'.repeat(58)}
+LUMODA ENTERPRISE
+The cook's helper
+Dealers in All Kinds of Kitchen Accessories
+MAA LUCY'S PLACE
+${'━'.repeat(58)}
+
+LOCATION 1: Alabar, Ghana Region
+Shop No. OCL/ZR/GF/A20 and A21
+
+LOCATION 2: Morocco (K.O) OLD Barbers Building
+Shop No. GF 26
+
+TEL: 0244369357 / 0546014044 / 0243563481
+
+${'━'.repeat(58)}
+INVOICE
+No: ${inv.number}
+Date: ${fmtDate(inv.createdAt)}
+
+Customer: ${inv.customerName}
+${inv.customerPhone ? 'Phone: ' + inv.customerPhone : ''}
+${inv.customerAddress ? 'Address: ' + inv.customerAddress : ''}
+
+${sep}
+QTY   DESCRIPTION                    UNIT PRICE     AMOUNT
+${sep}
+${rows}
+${sep}
+
+Total: ${fmtGHS(inv.total)}
+
+Status: ${String(inv.status || '').toUpperCase()}
+${inv.payMethod ? 'Payment: ' + (inv.payMethod === 'momo' ? 'Mobile Money' + (inv.momoNumber ? ' (' + inv.momoNumber + ')' : '') : 'Cash') : ''}
+${inv.notes ? 'Notes: ' + inv.notes : ''}
+
+Goods sold out are not returnable.
+`.trim();
 }
 
 
@@ -1557,39 +1601,126 @@ initData();
 // PRINT INVOICE
 // ============================================================
 function printInvoice() {
-  const inv = getAllInvoices().find(i=>i.id===viewingInvoiceId);
+  const inv = getAllInvoices().find(i => i.id === viewingInvoiceId);
   if (!inv) return;
-  const pmLine = inv.payMethod ? '<div style="margin-top:6px;font-size:12px"><strong>Payment:</strong> '+(inv.payMethod==='momo'?'Mobile Money'+(inv.momoNumber?' — '+inv.momoNumber:''):'Cash')+'</div>' : '';
-  const noteLine = inv.notes ? '<div style="margin-top:6px;font-size:12px"><strong>Notes:</strong> '+inv.notes+'</div>' : '';
-  const blanks = Array(Math.max(0,8-inv.items.length)).fill('<tr><td style="padding:8px 6px;border-bottom:1px solid #eee">&nbsp;</td><td style="border-bottom:1px solid #eee"></td><td style="border-bottom:1px solid #eee"></td><td style="border-bottom:1px solid #eee"></td></tr>').join('');
-  const rows = inv.items.map(item=>'<tr><td style="text-align:center;padding:8px 6px;border-bottom:1px solid #eee">'+item.qty+'</td><td style="padding:8px 6px;border-bottom:1px solid #eee">'+item.name+'</td><td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace">'+fmtGHS(item.price)+'</td><td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace;font-weight:700">'+fmtGHS(item.total)+'</td></tr>').join('');
+
+  const pmLine = inv.payMethod
+    ? '<div style="margin-top:6px;font-size:12px"><strong>Payment:</strong> ' +
+      (inv.payMethod === 'momo'
+        ? 'Mobile Money' + (inv.momoNumber ? ' — ' + escapeHtml(inv.momoNumber) : '')
+        : 'Cash') +
+      '</div>'
+    : '';
+
+  const noteLine = inv.notes
+    ? '<div style="margin-top:6px;font-size:12px"><strong>Notes:</strong> ' + escapeHtml(inv.notes) + '</div>'
+    : '';
+
+  const blanks = Array(Math.max(0, 8 - inv.items.length))
+    .fill(`
+      <tr>
+        <td style="padding:8px 6px;border-bottom:1px solid #eee">&nbsp;</td>
+        <td style="border-bottom:1px solid #eee"></td>
+        <td style="border-bottom:1px solid #eee"></td>
+        <td style="border-bottom:1px solid #eee"></td>
+      </tr>
+    `).join('');
+
+  const rows = inv.items.map(item => `
+    <tr>
+      <td style="text-align:center;padding:8px 6px;border-bottom:1px solid #eee">
+        ${item.qty}
+      </td>
+
+      <td style="padding:8px 6px;border-bottom:1px solid #eee">
+        ${escapeHtml(item.name)}
+      </td>
+
+      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace">
+        ${Number(item.price || 0).toFixed(2)}
+      </td>
+
+      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace;font-weight:700">
+        ${Number(item.total || 0).toFixed(2)}
+      </td>
+    </tr>
+  `).join('');
+
   const html = `
-    <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#000;max-width:600px;margin:0 auto">
-      <!-- HEADER -->
-      <table width="100%" style="background:#5C2D0A;color:white;padding:10px 14px;margin-bottom:0" cellpadding="0" cellspacing="0"><tr>
-        <td><div style="font-size:18px;font-weight:700;letter-spacing:1px">LUMODA ENTERPRISE</div><div style="font-style:italic;font-size:11px;opacity:.85">The cook's helper</div><div style="font-size:10px;opacity:.7">Dealers in All Kinds of Kitchen Accessories</div></td>
-        <td align="right"><div style="border:1px solid rgba(255,255,255,.4);padding:3px 10px;font-size:11px;font-weight:700">MAA LUCY'S PLACE</div></td>
-      </tr></table>
-      <div style="background:#C8291C;color:white;padding:6px 14px;display:flex;justify-content:space-between;font-weight:700;letter-spacing:.08em"><span>INVOICE</span><span>Nr: ${escapeHtml(inv.number)}</span><span>${fmtDate(inv.createdAt)}</span></div>
-      <div style="padding:10px 14px;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
-        <div><strong>Name:</strong> ${escapeHtml(inv.customerName)}</div>
-        ${inv.customerPhone?'<div><strong>Tel:</strong> '+escapeHtml(inv.customerPhone)+'</div>':''}
-        ${inv.customerAddress?'<div><strong>Address:</strong> '+escapeHtml(inv.customerAddress)+'</div>':''}
-      </div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
-        <thead><tr style="background:#C8291C;color:white"><th style="padding:8px 6px;width:56px">QTY</th><th style="padding:8px 6px;text-align:left">DESCRIPTION</th><th style="padding:8px 6px;text-align:right">@ UNIT</th><th style="padding:8px 6px;text-align:right">AMOUNT GH₵</th></tr></thead>
-        <tbody>${rows}${blanks}</tbody>
+    <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#000;max-width:620px;margin:0 auto">
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#5C2D0A;color:white;padding:12px 16px">
+        <tr>
+          <td>
+            <div style="font-size:20px;font-weight:800;letter-spacing:1px">
+              LUMODA ENTERPRISE
+            </div>
+            <div style="font-style:italic;font-size:12px;opacity:.9">
+              The cook's helper
+            </div>
+            <div style="font-size:10px;opacity:.75">
+              Dealers in All Kinds of Kitchen Accessories
+            </div>
+          </td>
+
+          <td align="right">
+            <div style="border:1px solid rgba(255,255,255,.45);padding:4px 10px;font-size:11px;font-weight:700">
+              MAA LUCY'S PLACE
+            </div>
+          </td>
+        </tr>
       </table>
-      <div style="border:2px solid #5C2D0A;border-top:0;padding:10px 14px;text-align:right;font-size:16px"><strong>Total GH₵: ${fmtGHS(inv.total)}</strong></div>
-      <div style="padding:8px 0;font-size:11px;color:#555">Status: ${escapeHtml(inv.status.toUpperCase())}${pmLine}${noteLine}</div>
-      <div style="display:flex;justify-content:space-between;margin-top:30px;font-size:11px"><span>Customer's Signature: _______________</span><span>Manager's Signature: _______________</span></div>
-      <div style="margin-top:14px;text-align:center;font-size:10px;color:#666">Goods sold out are not returnable</div>
-    </div>`;
-  const printArea=document.getElementById('print-area');
-  printArea.innerHTML=html;
+
+      <div style="background:#C8291C;color:white;padding:8px 14px;display:flex;justify-content:space-between;font-weight:700;letter-spacing:.08em">
+        <span>INVOICE</span>
+        <span>No: ${escapeHtml(inv.number)}</span>
+        <span>${fmtDate(inv.createdAt)}</span>
+      </div>
+
+      <div style="padding:12px 14px;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
+        <div><strong>Customer:</strong> ${escapeHtml(inv.customerName)}</div>
+        ${inv.customerPhone ? '<div><strong>Tel:</strong> ' + escapeHtml(inv.customerPhone) + '</div>' : ''}
+        ${inv.customerAddress ? '<div><strong>Address:</strong> ' + escapeHtml(inv.customerAddress) + '</div>' : ''}
+      </div>
+
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
+        <thead>
+          <tr style="background:#C8291C;color:white">
+            <th style="padding:8px 6px;width:56px;text-align:center">QTY</th>
+            <th style="padding:8px 6px;text-align:left">DESCRIPTION</th>
+            <th style="padding:8px 6px;text-align:right">UNIT PRICE</th>
+            <th style="padding:8px 6px;text-align:right">AMOUNT</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          ${rows}
+          ${blanks}
+        </tbody>
+      </table>
+
+      <div style="border:2px solid #5C2D0A;border-top:0;padding:12px 14px">
+        <div style="text-align:right;font-size:16px;font-weight:800">
+          Total: ${fmtGHS(inv.total)}
+        </div>
+
+        <div style="margin-top:8px;font-size:11px;color:#555">
+          <strong>Status:</strong> ${escapeHtml(inv.status.toUpperCase())}
+          ${pmLine}
+          ${noteLine}
+        </div>
+      </div>
+
+      <div style="margin-top:16px;text-align:center;font-size:10px;color:#666">
+        Goods sold out are not returnable
+      </div>
+    </div>
+  `;
+
+  const printArea = document.getElementById('print-area');
+  printArea.innerHTML = html;
   window.print();
 }
-
 // ============================================================
 // INITIAL SESSION RESTORE
 // ============================================================
