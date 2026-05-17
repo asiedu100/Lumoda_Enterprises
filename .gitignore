@@ -1,0 +1,10 @@
+node_modules/
+.history/
+.vscode/
+.cache/
+dist/
+build/
+.env
+*.log
+.DS
+supabase-config.js
