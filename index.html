@@ -71,7 +71,7 @@
   color:#333;
   font-weight:1000;
 ">
-  Powered by MRASYSTEMS 
+  Powered by MRASYSTEMS
 </div>
   </div>
 </div>
@@ -235,7 +235,7 @@
             <div style="flex:1"></div>
             <button class="btn btn-primary" onclick="openInvoiceModal()">+ New Invoice</button>
           </div>
-          <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Customer</th><th>Location</th><th>Total</th><th>Status</th><th>Payment</th><th>By</th><th></th></tr></thead><tbody id="invoices-body"></tbody></table></div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Customer</th><th>Location</th><th>Items</th><th>Total</th><th>Status</th><th>Payment</th><th>By</th><th></th></tr></thead><tbody id="invoices-body"></tbody></table></div>
         </div>
       </div>
 
@@ -390,7 +390,7 @@
 <label class="form-label">Line Items *</label>
 <div class="line-items-wrap">
   <div class="li-header">
-    <span>Product</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+    <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
   </div>
   <div id="line-items-body"></div>
 </div>
@@ -430,12 +430,82 @@
     <div class="modal-footer">
       <button class="btn btn-danger btn-sm" id="view-inv-delete" style="display:none">Delete Invoice</button>
       <div class="modal-footer-right">
-        <button class="btn btn-secondary" onclick="copyInvoiceText()">📋 Copy</button>
-        <button class="btn btn-secondary" onclick="printInvoice()">🖨 Print</button>
+        <button class="btn btn-secondary" onclick="copyInvoiceText()"> Copy</button>
+        <button class="btn btn-secondary" id="view-inv-share" onclick="shareInvoice()"> Share</button>
+        <button class="btn btn-secondary" id="view-inv-mark-paid" style="display:none" onclick="markViewingInvoicePaid()">Mark Paid</button>
+        <button class="btn btn-secondary" onclick="printInvoice()"> Print</button>
+        <button class="btn btn-secondary" id="view-inv-edit" onclick="openEditInvoiceModal(viewingInvoiceId)">Edit Invoice</button>
         <button class="btn btn-primary" onclick="closeModal('view-invoice-modal')">Close</button>
       </div>
     </div>
   </div>
+</div>
+
+<div class="modal-overlay" id="edit-invoice-modal">
+
+  <div class="modal">
+
+    <div class="modal-header">
+      <div class="modal-title">Edit Invoice</div>
+      <button class="modal-close" onclick="closeModal('edit-invoice-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Customer Name</label><input id="edit-customer-name" placeholder="Customer Name" class="form-input"></div>
+        <div class="form-group"><label class="form-label">Phone</label><input id="edit-phone" placeholder="Phone" class="form-input"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Address</label><input id="edit-address" placeholder="Address" class="form-input"></div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Payment Status</label>
+          <select id="edit-status" class="form-select">
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="partial">Partial</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Payment Method</label>
+          <select id="edit-pay-method" class="form-select">
+            <option value="">None</option>
+            <option value="cash">Cash</option>
+            <option value="momo">Mobile Money</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="form-label">Line Items</label>
+      <div class="line-items-wrap">
+        <div class="li-header">
+          <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+        </div>
+        <div id="edit-items-container"></div>
+      </div>
+      <textarea id="edit-notes" placeholder="Notes" class="form-textarea"></textarea>
+
+      <button class="btn btn-secondary btn-sm" onclick="addItem()">
+        + Add Product
+      </button>
+      <div class="inv-total" id="edit-invoice-total-display">Total: GH₵ 0.00</div>
+
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-invoice-modal')">
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveEditedInvoice()">
+          Save Changes
+        </button>
+      </div>
+    </div>
+
+  </div>
+
 </div>
 
 <!-- Product Modal -->
@@ -449,7 +519,11 @@
       </div>
       <div class="form-grid">
         <div class="form-group"><label class="form-label">Category</label><input class="form-input" id="prod-category" placeholder="e.g. Appliances"></div>
-        <div class="form-group"><label class="form-label">Unit Price (GH₵) *</label><input class="form-input" type="number" id="prod-price" placeholder="0.00"></div>
+        <div class="form-group"><label class="form-label">Retail Price (GH₵) *</label><input class="form-input" type="number" id="prod-price" placeholder="0.00"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Wholesale Price (GH₵)</label><input class="form-input" type="number" id="prod-wholesale-price" placeholder="0.00"></div>
+        <div class="form-group"><label class="form-label">Carton Price (GH₵)</label><input class="form-input" type="number" id="prod-carton-price" placeholder="0.00"></div>
       </div>
       <div class="form-grid">
         <div class="form-group"><label class="form-label">Alabar Stock</label><input class="form-input" type="number" id="prod-stock-alabar" placeholder="0"></div>
@@ -627,43 +701,33 @@
       <div class="modal-title">Warehouse Stock In</div>
       <button class="modal-close" onclick="closeModal('warehouse-stockin-modal')">×</button>
     </div>
-
     <div class="modal-body">
       <div class="form-group">
         <label class="form-label">Supplier Name *</label>
-        <input class="form-input" id="wh-in-supplier" placeholder="Supplier name">
+        <input class="form-input" id="wh-in-supplier" placeholder="e.g. Adom Trading">
       </div>
-
-      <div class="form-group">
-        <label class="form-label">Description of Goods *</label>
-        <input
-  class="form-input"
-  id="wh-in-description"
-  list="warehouse-stockin-items"
-  placeholder="Search product name"
-  oninput="selectWarehouseStockInItem(this.value)">
-
-<datalist id="warehouse-stockin-items"></datalist>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
+        <label class="form-label" style="margin:0">Items Received *</label>
+        <button class="btn btn-secondary btn-sm" onclick="_addStockInRow()">+ Add Item</button>
       </div>
-
-      <div class="form-grid">
-        <div class="form-group">
-          <label class="form-label">Item Code</label>
-          <input class="form-input" id="wh-in-code" placeholder="Optional">
-        </div>
-
-        <div class="form-group">
-          <label class="form-label">Quantity in Cartons *</label>
-          <input class="form-input" type="number" id="wh-in-cartons" min="1" placeholder="0">
-        </div>
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+        <table style="margin:0">
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description of Goods</th>
+              <th>Cartons</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="wh-stockin-rows-container"></tbody>
+        </table>
       </div>
-
-      <div class="form-group">
+      <div class="form-group" style="margin-top:14px">
         <label class="form-label">Notes</label>
         <textarea class="form-textarea" id="wh-in-notes" placeholder="Optional notes"></textarea>
       </div>
     </div>
-
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('warehouse-stockin-modal')">Cancel</button>
       <div class="modal-footer-right">
@@ -672,6 +736,7 @@
     </div>
   </div>
 </div>
+<datalist id="warehouse-stockin-items"></datalist>
 
 <div class="modal-overlay" id="warehouse-adjustment-modal">
   <div class="modal modal-md">
@@ -1022,10 +1087,11 @@ KT001,Kettle,30,10,85</pre>
   </div>
 </div>
 
+<datalist id="product-list"></datalist>
+
 <script src="supabase-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js"></script>
-<script src="config.js"></script>
 <script src="app.js"></script>
 <script src="warehouse.js"></script>
 </body>

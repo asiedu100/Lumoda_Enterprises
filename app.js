@@ -1,7 +1,12 @@
 // ============================================================
-// LUMODA ENTERPRISE - app.js v2.0
-// Security: role-based access, session tokens, auto-logout,
-//           login lockout, temp passwords, branch enforcement
+// LUMODA ENTERPRISE - app.js v2.1 (FIXED)
+// Fixes:
+//  1. Mark as Paid now reflects immediately in modal
+//  2. Newly added products appear in invoice line item search
+//  3. Share invoice works on all platforms with fallback
+//  4. Removed duplicate restoreSession IIFE (race condition)
+//  5. Quantity field starts empty — user types it
+//  6. Edit invoice products now show correctly after save
 // ============================================================
 
 // ---- CONSTANTS ----
@@ -10,7 +15,6 @@ const WARNING_MS         = 60 * 1000;
 const MAX_FAILED_LOGINS  = 5;
 const LOCKOUT_MS         = 15 * 60 * 1000;
 const TEMP_PW_EXPIRY_MS  = 24 * 60 * 60 * 1000;
-// Production auth is handled by Supabase only. No hardcoded admin password is kept in this file.
 
 // ---- STATE ----
 let currentUser       = null;
@@ -90,16 +94,16 @@ function ensureUsers() {
 function initData() {
   if (!LS.get('lumoda_products')) {
     LS.set('lumoda_products', [
-      {id:'p1', name:'Blender', sku:'BLN-001', category:'Appliances', price:250, stockAlabar:15, stockMorocco:10, reorder:5},
-      {id:'p2', name:'Cooking Pot (Large)', sku:'CPL-002', category:'Cookware', price:80, stockAlabar:30, stockMorocco:20, reorder:8},
-      {id:'p3', name:'Frying Pan', sku:'FPN-003', category:'Cookware', price:45, stockAlabar:25, stockMorocco:12, reorder:5},
-      {id:'p4', name:'Kitchen Knife Set', sku:'KKS-004', category:'Cutlery', price:120, stockAlabar:8, stockMorocco:4, reorder:5},
-      {id:'p5', name:'Mixing Bowl Set', sku:'MBS-005', category:'Bakeware', price:60, stockAlabar:20, stockMorocco:15, reorder:5},
-      {id:'p6', name:'Spatula Set', sku:'SPS-006', category:'Utensils', price:35, stockAlabar:40, stockMorocco:30, reorder:10},
-      {id:'p7', name:'Measuring Cups', sku:'MCU-007', category:'Bakeware', price:25, stockAlabar:3, stockMorocco:2, reorder:8},
-      {id:'p8', name:'Cutting Board', sku:'CTB-008', category:'Utensils', price:40, stockAlabar:18, stockMorocco:10, reorder:5},
-      {id:'p9', name:'Pressure Cooker', sku:'PRC-009', category:'Appliances', price:180, stockAlabar:6, stockMorocco:4, reorder:3},
-      {id:'p10', name:'Food Steamer', sku:'FST-010', category:'Appliances', price:95, stockAlabar:2, stockMorocco:1, reorder:5},
+      {id:'p1', name:'Blender', sku:'BLN-001', category:'Appliances', price:250, wholesalePrice:220, cartonPrice:200, stockAlabar:15, stockMorocco:10, reorder:5},
+      {id:'p2', name:'Cooking Pot (Large)', sku:'CPL-002', category:'Cookware', price:80, wholesalePrice:70, cartonPrice:65, stockAlabar:30, stockMorocco:20, reorder:8},
+      {id:'p3', name:'Frying Pan', sku:'FPN-003', category:'Cookware', price:45, wholesalePrice:40, cartonPrice:36, stockAlabar:25, stockMorocco:12, reorder:5},
+      {id:'p4', name:'Kitchen Knife Set', sku:'KKS-004', category:'Cutlery', price:120, wholesalePrice:105, cartonPrice:95, stockAlabar:8, stockMorocco:4, reorder:5},
+      {id:'p5', name:'Mixing Bowl Set', sku:'MBS-005', category:'Bakeware', price:60, wholesalePrice:52, cartonPrice:48, stockAlabar:20, stockMorocco:15, reorder:5},
+      {id:'p6', name:'Spatula Set', sku:'SPS-006', category:'Utensils', price:35, wholesalePrice:30, cartonPrice:27, stockAlabar:40, stockMorocco:30, reorder:10},
+      {id:'p7', name:'Measuring Cups', sku:'MCU-007', category:'Bakeware', price:25, wholesalePrice:22, cartonPrice:19, stockAlabar:3, stockMorocco:2, reorder:8},
+      {id:'p8', name:'Cutting Board', sku:'CTB-008', category:'Utensils', price:40, wholesalePrice:35, cartonPrice:31, stockAlabar:18, stockMorocco:10, reorder:5},
+      {id:'p9', name:'Pressure Cooker', sku:'PRC-009', category:'Appliances', price:180, wholesalePrice:158, cartonPrice:145, stockAlabar:6, stockMorocco:4, reorder:3},
+      {id:'p10', name:'Food Steamer', sku:'FST-010', category:'Appliances', price:95, wholesalePrice:83, cartonPrice:76, stockAlabar:2, stockMorocco:1, reorder:5},
     ]);
   }
   if (!LS.get('lumoda_invoices'))      LS.set('lumoda_invoices', []);
@@ -115,7 +119,7 @@ function getUsers()        { return LS.get('lumoda_users') || []; }
 function getInvoices()     { return (LS.get('lumoda_invoices') || []).filter(i => !i.deleted); }
 function getAllInvoices()   { return LS.get('lumoda_invoices') || []; }
 function getCustomers()    { return LS.get('lumoda_customers') || []; }
-function getProducts()     { return LS.get('lumoda_products') || []; }
+function getProducts()     { return normalizeProducts(LS.get('lumoda_products') || []); }
 function getStockHistory() { return LS.get('lumoda_stockhistory') || []; }
 function getSessions()     { return SS.get('lumoda_sessions') || LS.get('lumoda_sessions') || []; }
 
@@ -135,10 +139,20 @@ function toast(msg, type='') {
 // AUDIT
 // ============================================================
 function addAudit(action, detail) {
+  // Always write to localStorage immediately for instant feedback
   const log = LS.get('lumoda_audit') || [];
-  log.unshift({ id:'au_'+Date.now(), action, detail, by: currentUser ? currentUser.username : 'system', byName: currentUser ? currentUser.fullName : 'system', createdAt: Date.now() });
+  log.unshift({
+    id: 'au_'+Date.now(),
+    action,
+    detail,
+    by: currentUser ? currentUser.username : 'system',
+    byName: currentUser ? currentUser.fullName : 'system',
+    createdAt: Date.now()
+  });
   if (log.length > 1000) log.length = 1000;
   LS.set('lumoda_audit', log);
+
+  // FIX BUG 3: Write to Supabase audit_logs table directly (not just RPC)
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured() && currentUser) {
     void window.LumodaSupabase.logAudit(action, detail).catch(err => {
       console.warn('Server audit write failed:', err);
@@ -262,14 +276,32 @@ async function resolveSupabaseLoginEmail(identifier) {
 
 async function syncSupabaseCache() {
   if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
-  const [products, customers, invoices] = await Promise.all([
+
+  const [products, customers, invoices, stockHistory, auditLogs] = await Promise.all([
     window.LumodaSupabase.loadProducts(),
     window.LumodaSupabase.loadCustomers().catch(() => []),
-    window.LumodaSupabase.loadInvoices().catch(() => [])
+    window.LumodaSupabase.loadInvoices().catch(() => []),
+    // FIX BUG 3: Load stock history and audit logs from Supabase
+    window.LumodaSupabase.loadStockHistory().catch(() => null),
+    window.LumodaSupabase.loadAuditLogs().catch(() => null)
   ]);
-  LS.set('lumoda_products', products);
+
+  LS.set('lumoda_products', normalizeProducts(products));
   LS.set('lumoda_customers', customers);
   LS.set('lumoda_invoices', invoices);
+
+  // Merge server stock history into local (server is source of truth)
+  if (Array.isArray(stockHistory) && stockHistory.length > 0) {
+    LS.set('lumoda_stockhistory', stockHistory);
+  }
+
+  // Merge server audit logs into local (server is source of truth)
+  if (Array.isArray(auditLogs) && auditLogs.length > 0) {
+    LS.set('lumoda_audit', auditLogs);
+  }
+
+  // FIX #2: Refresh product suggestions in any open invoice modal after cache sync
+  refreshAllLineItemDataLists();
 }
 
 async function doLogin() {
@@ -295,7 +327,7 @@ async function doLogin() {
       currentUser = supabaseProfileToLocal(profile);
       currentLocation = currentUser.location;
       currentUser.token = registerSession(currentUser);
-  setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
+      setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
       await syncSupabaseCache();
       addAudit('Login', `"${currentUser.fullName}" signed in with Supabase [${currentUser.location}]`);
       showApp();
@@ -312,7 +344,7 @@ async function doLogin() {
 }
 
 // ============================================================
-// FORCED PASSWORD CHANGE (first login)
+// FORCED PASSWORD CHANGE
 // ============================================================
 function showChangePwScreen() {
   document.getElementById('auth-screen').style.display = 'none';
@@ -376,9 +408,9 @@ function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('change-pw-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
-  updateUserUI(); buildNavForRole(); 
+  updateUserUI(); buildNavForRole();
   const startPage = (currentUser && currentUser.role === 'warehouse_manager') ? 'warehouse' : 'dashboard';
-  navigate(startPage, null); 
+  navigate(startPage, null);
   startActivityTracking();
 }
 
@@ -391,10 +423,16 @@ function isAdmin() {
   return !!session && session.username === currentUser.username && session.role === 'admin';
 }
 function requireAdmin(action) {
-  if (!isAdmin()) {
-    toast('Only admin can ' + action, 'error');
-    return false;
-  }
+  if (!isAdmin()) { toast('Only admin can ' + action, 'error'); return false; }
+  return true;
+}
+function canEditInvoice(inv) {
+  if (!currentUser || !inv || inv.deleted) return false;
+  if (isAdmin()) return true;
+  return inv.location && currentUser.location === inv.location;
+}
+function requireInvoiceEdit(inv, action) {
+  if (!canEditInvoice(inv)) { toast('You cannot ' + action + ' for this invoice', 'error'); return false; }
   return true;
 }
 
@@ -403,7 +441,6 @@ function buildNavForRole() {
   const warehouseManager = currentUser && currentUser.role === 'warehouse_manager';
 
   if (warehouseManager) {
-    // Warehouse manager sees ONLY warehouse page
     ['dashboard','invoices','customers','products','stockhistory','reports','audit','users'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'none';
@@ -411,9 +448,8 @@ function buildNavForRole() {
     const warehouseNav = document.getElementById('nav-warehouse');
     if (warehouseNav) warehouseNav.style.display = 'flex';
     document.getElementById('loc-filter').style.display = 'none';
-    currentLocation = currentUser.location; // warehouse_manager has 'All' location
+    currentLocation = currentUser.location;
   } else if (admin) {
-    // Admin sees all business pages, including warehouse
     ['reports','audit','users'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'flex';
@@ -426,7 +462,6 @@ function buildNavForRole() {
     if (warehouseNav) warehouseNav.style.display = 'flex';
     document.getElementById('loc-filter').style.display = 'flex';
   } else {
-    // Staff sees core pages only (no admin, warehouse, or reports)
     ['reports','audit','users','warehouse'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'none';
@@ -451,9 +486,9 @@ function filterByLoc(arr) {
 // ============================================================
 function updateUserUI() {
   if (!currentUser) return;
-  const u          = currentUser;
-  const firstName  = u.fullName.split(' ')[0];
-  const initials   = u.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
+  const u         = currentUser;
+  const firstName = u.fullName.split(' ')[0];
+  const initials  = u.fullName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   document.getElementById('topbar-username').textContent = u.fullName;
   document.getElementById('topbar-avatar').textContent   = initials;
   document.getElementById('sidebar-user-info').textContent = '@' + u.username + ' · ' + u.location;
@@ -549,7 +584,6 @@ function weekRange(value = new Date()) {
   end.setDate(end.getDate() + 7);
   return { start, end };
 }
-// Simple HTML escape for user-supplied strings to reduce XSS risk
 function escapeHtml(v){
   if (v === null || v === undefined) return '';
   return String(v)
@@ -559,23 +593,43 @@ function escapeHtml(v){
     .replace(/"/g,'&quot;')
     .replace(/'/g,'&#39;');
 }
-function autoLoginAllowed() {
-  return LS.get('lumoda_allow_auto_login') === '1';
+function escAttr(v) { return escapeHtml(v); }
+
+function normalizeProduct(p) {
+  const retail = Number(p.price ?? p.retailPrice ?? p.retail_price ?? 0);
+  const wholesale = Number(p.wholesalePrice ?? p.wholesale_price ?? retail);
+  const carton = Number(p.cartonPrice ?? p.carton_price ?? (wholesale || retail));
+  return {
+    ...p,
+    price: retail,
+    retailPrice: retail,
+    wholesalePrice: wholesale,
+    cartonPrice: carton
+  };
 }
+function normalizeProducts(products) { return (products || []).map(normalizeProduct); }
+
+function productPriceForType(product, priceType) {
+  const p = normalizeProduct(product || {});
+  if (priceType === 'wholesale') return Number(p.wholesalePrice || p.price || 0);
+  if (priceType === 'carton') return Number(p.cartonPrice || p.wholesalePrice || p.price || 0);
+  return Number(p.price || 0);
+}
+function priceTypeLabel(priceType) {
+  return priceType === 'wholesale' ? 'Wholesale' : priceType === 'carton' ? 'Carton' : 'Retail';
+}
+function autoLoginAllowed() { return LS.get('lumoda_allow_auto_login') === '1'; }
 function setAutoLoginAllowed(enabled) {
   if (enabled) LS.set('lumoda_allow_auto_login', '1');
   else LS.del('lumoda_allow_auto_login');
 }
-function sumInvoiceTotal(invoices) {
-  return invoices.reduce((sum, invoice) => sum + invoice.total, 0);
-}
+function sumInvoiceTotal(invoices) { return invoices.reduce((sum, invoice) => sum + invoice.total, 0); }
 function weekComparisonLabel(currentTotal, previousTotal) {
   const delta = currentTotal - previousTotal;
   const direction = delta >= 0 ? 'up' : 'down';
   const sign = delta >= 0 ? '+' : '-';
   return '<span class="stat-delta ' + direction + '">' + sign + fmtGHS(Math.abs(delta)) + ' vs last week</span>';
 }
-
 function statusBadge(s) {
   const m = { paid:'badge-success', pending:'badge-warning', partial:'badge-info', refunded:'badge-neutral', cancelled:'badge-danger' };
   return '<span class="badge ' + (m[s]||'badge-neutral') + '">' + s + '</span>';
@@ -584,6 +638,31 @@ function stockBadge(stock, reorder) {
   if (stock === 0) return '<span class="badge badge-danger">Out of Stock</span>';
   if (stock <= reorder) return '<span class="badge badge-warning">Low Stock</span>';
   return '<span class="badge badge-success">In Stock</span>';
+}
+
+// ============================================================
+// FIX #2: Refresh datalists in all open line item rows
+// Called after any product is added/edited or cache synced
+// ============================================================
+function refreshAllLineItemDataLists() {
+  const products = getProducts();
+  const opts = products.map(p => '<option value="' + escAttr(p.name) + '">').join('');
+
+  // Refresh new invoice modal line items
+  document.querySelectorAll('#line-items-body .line-item-row').forEach(row => {
+    const dl = row.querySelector('datalist');
+    if (dl) dl.innerHTML = opts;
+  });
+
+  // Refresh edit invoice modal line items
+  document.querySelectorAll('#edit-items-container .line-item-row').forEach(row => {
+    const dl = row.querySelector('datalist');
+    if (dl) dl.innerHTML = opts;
+  });
+
+  // Also refresh the global product-list datalist if it exists
+  const globalList = document.getElementById('product-list');
+  if (globalList) globalList.innerHTML = opts;
 }
 
 // ============================================================
@@ -618,13 +697,11 @@ function renderDashboard() {
   document.getElementById('stat-pending-d').textContent = pendingInvs.length + ' outstanding';
   document.getElementById('stat-customers').textContent = filterByLoc(getCustomers()).length;
 
-  // Recent invoices
   const recent = [...invoices].sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt)).slice(0,6);
   document.getElementById('dash-recent-body').innerHTML = recent.length === 0
     ? '<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:32px">No invoices yet</td></tr>'
     : recent.map(i => '<tr style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')"><td class="mono">'+i.number+'</td><td>'+i.customerName+'</td><td class="mono">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td></tr>').join('');
 
-  // Low stock
   const effLoc  = isAdmin() ? currentLocation : currentUser.location;
   const lowStock = getProducts().filter(p => { const s = effLoc==='Morocco'?p.stockMorocco:effLoc==='Alabar'?p.stockAlabar:Math.min(p.stockAlabar,p.stockMorocco); return s <= p.reorder; }).slice(0,6);
   document.getElementById('low-stock-list').innerHTML = lowStock.length === 0
@@ -637,7 +714,6 @@ function renderDashboard() {
         return '<div class="low-stock-item"><div style="flex:1"><div style="font-size:13px;font-weight:500">'+p.name+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">Stock: '+stock+' · Reorder: '+p.reorder+'</div><div class="stock-bar-wrap" style="margin-top:6px"><div class="stock-bar '+cls+'" style="width:'+pct+'%"></div></div></div>'+adjBtn+'</div>';
       }).join('');
 
-  // Cash vs MoMo today
   const todayCash = todayInvs.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);
   const todayMomo = todayInvs.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);
   const todayUnspecified = todayInvs.filter(i=>i.status==='paid'&&!i.payMethod).reduce((s,i)=>s+i.total,0);
@@ -651,7 +727,6 @@ function renderDashboard() {
     if (momoEl) momoEl.textContent = fmtGHS(todayMomo);
   }
 
-  // Active sessions (admin only)
   renderSessionsPanel();
   renderWeeklyChart(invoices);
 }
@@ -686,8 +761,8 @@ function renderInvoices() {
   invoices.sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt));
   const tbody = document.getElementById('invoices-body');
   tbody.innerHTML = invoices.length===0
-  ? '<tr><td colspan="9" style="text-align:center;color:var(--gray-400);padding:40px">No invoices found</td></tr>'
-  : invoices.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+i.number+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td>'+i.customerName+'</td><td><span class="badge badge-neutral">'+i.location+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td><td>'+(i.payMethod==='cash'?'💵 Cash':i.payMethod==='momo'?'📱 MoMo':'—')+'</td><td style="color:var(--gray-400);font-size:12px">'+(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
+    ? '<tr><td colspan="10" style="text-align:center;color:var(--gray-400);padding:40px">No invoices found</td></tr>'
+    : invoices.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+i.number+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td>'+i.customerName+'</td><td><span class="badge badge-neutral">'+i.location+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td><td>'+(i.payMethod==='cash'?'💵 Cash':i.payMethod==='momo'?'📱 MoMo':'—')+'</td><td style="color:var(--gray-400);font-size:12px">'+(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
 }
 function filterInvoices(val)      { invoiceFilter.text=val;   renderInvoices(); }
 function filterInvoiceStatus(val) { invoiceFilter.status=val; renderInvoices(); }
@@ -698,10 +773,10 @@ function openInvoiceModal() {
   ['inv-cust-name','inv-cust-phone','inv-cust-addr','inv-notes','inv-momo-number'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   document.getElementById('inv-status').value = 'pending';
   document.getElementById('invoice-total-display').textContent = 'Total: GH₵ 0.00';
-  const _pmRow  = document.getElementById('payment-method-row');
+  const _pmRow   = document.getElementById('payment-method-row');
   const _momoRow = document.getElementById('momo-number-row');
-  const _pmCash = document.getElementById('pm-cash');
-  const _pmMomo = document.getElementById('pm-momo');
+  const _pmCash  = document.getElementById('pm-cash');
+  const _pmMomo  = document.getElementById('pm-momo');
   if (_pmRow)   _pmRow.style.display   = 'none';
   if (_momoRow) _momoRow.style.display = 'none';
   if (_pmCash)  _pmCash.style.cssText  = 'border:1px solid var(--gray-200);border-radius:var(--radius);padding:10px 14px;cursor:pointer;font-size:13px;font-weight:500;text-align:center';
@@ -709,7 +784,8 @@ function openInvoiceModal() {
   window._selectedPayMethod = '';
   const locSel = document.getElementById('inv-location');
   if (!isAdmin()) { locSel.value = currentUser.location; locSel.disabled = true; } else locSel.disabled = false;
-  addLineItem(); openModal('invoice-modal');
+  addLineItem();
+  openModal('invoice-modal');
 }
 
 function onStatusChange() {
@@ -732,31 +808,42 @@ function selectPayMethod(method) {
   document.getElementById('momo-number-row').style.display = method==='momo' ? 'block' : 'none';
 }
 
+// FIX #5: quantity starts empty — user types it themselves
 function addLineItem() {
   const id   = lineItemCount++;
-  const opts = getProducts().map(p=>'<option value="'+p.name+'" data-price="'+p.price+'">'+p.name+'</option>').join('');
-  const priceLocked = true;
-  const priceExtra  = priceLocked ? ' readonly title="Only admin can change prices"' : '';
-  const priceBg     = priceLocked ? 'background:var(--gray-50);color:var(--gray-400);cursor:not-allowed;' : '';
+  const opts = getProducts().map(p=>'<option value="'+escAttr(p.name)+'">'+escapeHtml(p.name)+'</option>').join('');
   const row  = document.createElement('div');
   row.className = 'line-item-row'; row.id = 'li-'+id;
+  // qty has no value="" and placeholder="Qty" — user must type it
   row.innerHTML =
-    '<input type="text" list="pl-'+id+'" placeholder="Product name" oninput="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
+    '<input type="text" list="pl-'+id+'" placeholder="Product name" oninput="onLineItemInput('+id+')" onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
     '<datalist id="pl-'+id+'">'+opts+'</datalist>'+
-    '<input type="number" placeholder="1" min="1" value="1" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
-    '<input type="number" placeholder="0.00" min="0" step="0.01" oninput="calcTotal()"'+priceExtra+' style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;'+priceBg+'">'+
+    '<select onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none"><option value="retail">Retail</option><option value="wholesale">Wholesale</option><option value="carton">Carton</option></select>'+
+    '<input type="number" placeholder="Qty" min="1" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
+    '<input type="number" placeholder="0.00" min="0" step="0.01" readonly title="Price is set automatically based on product and type" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">'+
     '<button class="remove-item" onclick="removeLineItem('+id+')">×</button>';
   document.getElementById('line-items-body').appendChild(row);
 }
 
 function onLineItemInput(id) {
   const row = document.getElementById('li-'+id);
-  const ni  = row.querySelector('input[type=text]');
-  const pi  = row.querySelectorAll('input')[2];
-  const m   = getProducts().find(p=>p.name.toLowerCase()===ni.value.toLowerCase());
+  if (!row) return;
+  const ni        = row.querySelector('input[type=text]');
+  const priceType = row.querySelector('select')?.value || 'retail';
+  const inputs    = row.querySelectorAll('input');
+  const pi        = inputs[2]; // price field (text=0, qty=1, price=2)
+  const m         = getProducts().find(p => p.name.toLowerCase() === ni.value.toLowerCase());
   if (m) {
-    // Always auto-fill price; staff can't override (field is readonly)
-    pi.value = m.price;
+    const newPrice = productPriceForType(m, priceType);
+    pi.removeAttribute('readonly');
+    pi.value = Number(newPrice).toFixed(2);
+    pi.setAttribute('readonly', '');
+    pi.style.borderColor = '#16a34a';
+    pi.style.color = '#166534';
+    setTimeout(() => {
+      pi.style.borderColor = '';
+      pi.style.color = 'var(--gray-400)';
+    }, 1000);
   }
   calcTotal();
 }
@@ -765,118 +852,92 @@ function removeLineItem(id) { const r=document.getElementById('li-'+id); if(r) r
 
 function calcTotal() {
   let subtotal = 0;
-
   document.querySelectorAll('#line-items-body .line-item-row').forEach(row => {
     const inp = row.querySelectorAll('input');
+    // inp[0]=name(text), inp[1]=qty(number), inp[2]=price(number)
     subtotal += (parseFloat(inp[1].value) || 0) * (parseFloat(inp[2].value) || 0);
   });
-
   const discount = parseFloat(document.getElementById('inv-discount')?.value) || 0;
   const total = Math.max(0, subtotal - discount);
-
   document.getElementById('invoice-total-display').textContent =
     'Subtotal: ' + fmtGHS(subtotal) +
     ' | Discount: ' + fmtGHS(discount) +
     ' | Total: ' + fmtGHS(total);
 }
 
-async function createInvoice()  {
+async function createInvoice() {
   if (invoiceSaving) return;
   invoiceSaving = true;
 
-  const name   = document.getElementById('inv-cust-name').value.trim();
-  const phone  = document.getElementById('inv-cust-phone').value.trim();
-  const addr   = document.getElementById('inv-cust-addr').value.trim();
-  const loc    = document.getElementById('inv-location').value;
+  const name       = document.getElementById('inv-cust-name').value.trim();
+  const phone      = document.getElementById('inv-cust-phone').value.trim();
+  const addr       = document.getElementById('inv-cust-addr').value.trim();
+  const loc        = document.getElementById('inv-location').value;
   const status     = document.getElementById('inv-status').value;
   const notes      = document.getElementById('inv-notes').value.trim();
   const discount   = parseFloat(document.getElementById('inv-discount')?.value) || 0;
   const momoEl     = document.getElementById('inv-momo-number');
   const momoNumber = momoEl ? momoEl.value.trim() : '';
 
-  // Validate payment method when paid
-if (status === 'paid' && !window._selectedPayMethod) {
-  invoiceSaving = false;
-  toast('Please select Cash or Mobile Money','error');
-  return;
-}
-
-const payMethod = status === 'paid' ? (window._selectedPayMethod || '') : '';
-
-if (!name) {
-  invoiceSaving = false;
-  toast('Customer name is required','error');
-  return;
-}
-
-const rows = document.querySelectorAll('#line-items-body .line-item-row');
-
-if (rows.length === 0) {
-  invoiceSaving = false;
-  toast('Add at least one item','error');
-  return;
-}
-
-const items = [];
-let valid = true;
-
-rows.forEach(row => {
-  const inp = row.querySelectorAll('input');
-  const pn = inp[0].value.trim();
-  const qty = parseInt(inp[1].value) || 0;
-  const price = parseFloat(inp[2].value) || 0;
-
-  if (!pn || qty < 1 || price <= 0) {
-    valid = false;
+  if (status === 'paid' && !window._selectedPayMethod) {
+    invoiceSaving = false;
+    toast('Please select Cash or Mobile Money', 'error');
     return;
   }
+  const payMethod = status === 'paid' ? (window._selectedPayMethod || '') : '';
 
-  items.push({ name: pn, qty, price, total: qty * price });
-});
+  if (!name) { invoiceSaving = false; toast('Customer name is required', 'error'); return; }
 
-if (!valid) {
-  invoiceSaving = false;
-  return;
-}
+  const rows = document.querySelectorAll('#line-items-body .line-item-row');
+  if (rows.length === 0) { invoiceSaving = false; toast('Add at least one item', 'error'); return; }
+
+  const items = [];
+  let valid = true;
+  rows.forEach(row => {
+    const inp = row.querySelectorAll('input');
+    const pn  = inp[0].value.trim();
+    const priceType = row.querySelector('select')?.value || 'retail';
+    const qty   = parseInt(inp[1].value) || 0;
+    const price = parseFloat(inp[2].value) || 0;
+    if (!pn || qty < 1 || price <= 0) { valid = false; return; }
+    items.push({ name: pn, priceType, qty, price, total: qty * price });
+  });
+
+  if (!valid) { invoiceSaving = false; toast('Fill in all item fields (name, qty, price)', 'error'); return; }
+
   const subtotal = items.reduce((s,i)=>s+i.total,0);
-const total = Math.max(0, subtotal - discount);
-const seq   = LS.get('lumoda_invoice_seq')||2388;
-const number = String(seq).padStart(6,'0');
-LS.set('lumoda_invoice_seq', seq+1);
+  const total    = Math.max(0, subtotal - discount);
+  const seq      = LS.get('lumoda_invoice_seq')||2388;
+  const number   = String(seq).padStart(6,'0');
+  LS.set('lumoda_invoice_seq', seq+1);
 
-const invoice = {
-  id:'inv_'+Date.now(),
-  number,
-  customerName:name,
-  customerPhone:phone,
-  customerAddress:addr,
-  location:loc,
-  items,
-  subtotal,
-  discount,
-  total,
-  status,
-  payMethod,
-  momoNumber,
-  notes,
-  createdBy:currentUser.id,
-  createdByName:currentUser.fullName,
-  createdAt:Date.now(),
-  deleted:false
-};
+  const invoice = {
+    id:'inv_'+Date.now(),
+    number,
+    customerName:name,
+    customerPhone:phone,
+    customerAddress:addr,
+    location:loc,
+    items,
+    subtotal,
+    discount,
+    total,
+    status,
+    payMethod,
+    momoNumber,
+    notes,
+    createdBy:currentUser.id,
+    createdByName:currentUser.fullName,
+    createdAt:Date.now(),
+    deleted:false
+  };
 
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try {
       const cachedProducts = getProducts();
-      // Build items — product_id is optional, server looks up by name if null
       const p_items = items.map(it => {
         const prod = cachedProducts.find(p => p.name.toLowerCase() === it.name.toLowerCase());
-        return {
-          product_id: prod ? prod.id : null,
-          name:       it.name,
-          qty:        it.qty,
-          price:      it.price
-        };
+        return { product_id: prod ? prod.id : null, name: it.name, qty: it.qty, price: it.price, sale_type: it.priceType || 'retail' };
       });
       const res = await window.LumodaSupabase.createInvoiceNoStock({
         p_customer_name:    name,
@@ -891,61 +952,69 @@ const invoice = {
         p_discount:         discount || 0
       });
       if (res.error) throw res.error;
-await syncSupabaseCache();
-addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+      await syncSupabaseCache();
+      addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+      invoiceSaving = false;
+      closeModal('invoice-modal');
+      toast('Invoice '+number+' created!');
+      currentLocation = 'All';
+      renderDashboard();
+      if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
+      try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
+      return;
+    } catch (err) {
+      console.error('Invoice creation error:', err);
+      invoiceSaving = false;
+      toast((err.message||'Could not create invoice'), 'error');
+      return;
+    }
+  }
 
-invoiceSaving = false;
-closeModal('invoice-modal');
-toast('Invoice '+number+' created!');
-
-currentLocation = 'All';
-renderDashboard();
-
-if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
-
-try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
-
-
-
-return;
-
-} catch (err) {
-  console.error('Invoice creation error:', err);
-
+  const invoices = LS.get('lumoda_invoices')||[];
+  invoices.push(invoice);
+  LS.set('lumoda_invoices', invoices);
+  saveCustomerIfNew(name,phone,addr,loc);
+  addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
   invoiceSaving = false;
-  toast((err.message||'Could not create invoice'), 'error');
-
-  return;
+  closeModal('invoice-modal');
+  toast('Invoice '+number+' created!');
+  currentLocation = 'All';
+  renderDashboard();
+  if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
+  try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
 }
-}
 
-const invoices = LS.get('lumoda_invoices')||[];
-invoices.push(invoice);
-LS.set('lumoda_invoices', invoices);
-
-saveCustomerIfNew(name,phone,addr,loc);
-addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
-
-invoiceSaving = false;
-closeModal('invoice-modal');
-toast('Invoice '+number+' created!');
-
-currentLocation = 'All';
-renderDashboard();
-
-if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
-
-try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
-}
 function viewInvoice(id) {
   viewingInvoiceId = id;
   const inv = getAllInvoices().find(i=>i.id===id);
   if (!inv) return;
   document.getElementById('view-inv-title').textContent = 'Nr: '+inv.number;
   document.getElementById('view-inv-body').innerHTML = buildInvoiceHTML(inv);
+
   const delBtn = document.getElementById('view-inv-delete');
   delBtn.style.display = isAdmin()&&!inv.deleted ? 'inline-flex':'none';
   delBtn.onclick = () => deleteInvoice(id);
+
+  // FIX #1: Mark as Paid button — always show if not already paid and user can edit
+  const paidBtn = document.getElementById('view-inv-mark-paid');
+  if (paidBtn) {
+    paidBtn.style.display = canEditInvoice(inv) && inv.status !== 'paid' ? 'inline-flex' : 'none';
+    paidBtn.onclick = () => markViewingInvoicePaid();
+  }
+
+  const editBtn = document.getElementById('view-inv-edit');
+  if (editBtn) {
+    editBtn.style.display = canEditInvoice(inv) ? 'inline-flex' : 'none';
+    editBtn.onclick = () => openEditInvoiceModal(id);
+  }
+
+  // FIX #3: Share button — always present
+  const shareBtn = document.getElementById('view-inv-share');
+  if (shareBtn) {
+    shareBtn.style.display = 'inline-flex';
+    shareBtn.onclick = () => shareInvoice();
+  }
+
   openModal('view-invoice-modal');
 }
 
@@ -959,12 +1028,10 @@ function buildInvoiceHTML(inv) {
     '<div style="background:var(--brand-brown);color:white;padding:8px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">' +
       '<div>' +
         '<div style="font-family:var(--font-serif);font-size:16px;font-weight:600;letter-spacing:.04em">LUMODA ENTERPRISE</div>' +
-        '<div style="font-family:var(--font-serif);font-style:italic;font-size:11px;opacity:.8">The cook\\\'s helper</div>' +
+        '<div style="font-family:var(--font-serif);font-style:italic;font-size:11px;opacity:.8">The cook\'s helper</div>' +
         '<div style="font-size:10px;opacity:.7;margin-top:2px">Dealers in All Kinds of Kitchen Accessories</div>' +
       '</div>' +
-
       '<div style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;padding:3px 10px;font-size:11px;font-weight:700;letter-spacing:.06em;white-space:nowrap;align-self:center">MAA LUCY\'S PLACE</div>' +
-
       '<div style="text-align:right;font-size:9px;opacity:.75;font-family:var(--font-mono)">' +
         '<div>LOC 1: Alabar, Ghana Region</div>' +
         '<div>Shop No. OCL/ZR/GF/A20 &amp; A21</div>' +
@@ -982,14 +1049,9 @@ function buildInvoiceHTML(inv) {
     '<div style="padding:10px 14px;background:var(--white)">' +
       '<div style="display:flex;gap:16px;font-size:13px;flex-wrap:wrap">' +
         '<span style="color:var(--gray-400)">Name:</span><strong>'+escapeHtml(inv.customerName)+'</strong>' +
-        (inv.customerPhone
-          ? '<span style="color:var(--gray-400)">Tel:</span><span>'+escapeHtml(inv.customerPhone)+'</span>'
-          : '') +
+        (inv.customerPhone ? '<span style="color:var(--gray-400)">Tel:</span><span>'+escapeHtml(inv.customerPhone)+'</span>' : '') +
       '</div>' +
-
-      (inv.customerAddress
-        ? '<div style="font-size:13px;margin-top:4px"><span style="color:var(--gray-400)">Address:</span> '+escapeHtml(inv.customerAddress)+'</div>'
-        : '') +
+      (inv.customerAddress ? '<div style="font-size:13px;margin-top:4px"><span style="color:var(--gray-400)">Address:</span> '+escapeHtml(inv.customerAddress)+'</div>' : '') +
     '</div>' +
 
     '<table style="margin:0">' +
@@ -997,16 +1059,15 @@ function buildInvoiceHTML(inv) {
         '<tr style="background:var(--brand-red)">' +
           '<th style="color:white;padding:8px 10px;font-size:11px;width:56px;text-align:center">QTY</th>' +
           '<th style="color:white;padding:8px 10px;font-size:11px">DESCRIPTION</th>' +
-          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:100px"> UNIT PRICE </th>' +
-          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:110px">AMOUNT </th>' +
+          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:100px">UNIT PRICE</th>' +
+          '<th style="color:white;padding:8px 10px;font-size:11px;text-align:right;width:110px">AMOUNT</th>' +
         '</tr>' +
       '</thead>' +
-
       '<tbody>' +
         inv.items.map(item =>
           '<tr>' +
             '<td style="text-align:center;padding:9px 10px;font-weight:500">'+escapeHtml(item.qty)+'</td>' +
-            '<td style="padding:9px 10px">'+escapeHtml(item.name)+'</td>' +
+            '<td style="padding:9px 10px">'+escapeHtml(item.name)+(item.priceType ? ' <span style="color:var(--gray-400);font-size:11px">('+priceTypeLabel(item.priceType)+')</span>' : '')+'</td>' +
             '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono)">'+Number(item.price || 0).toFixed(2)+'</td>' +
             '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono);font-weight:600">'+Number(item.total || 0).toFixed(2)+'</td>' +
           '</tr>'
@@ -1015,7 +1076,6 @@ function buildInvoiceHTML(inv) {
       '</tbody>' +
     '</table>' +
 
-    // TOTALS SECTION (updated)
     '<div style="display:flex;flex-direction:column;align-items:flex-end;border-top:2px solid var(--brand-brown);padding:10px 14px;gap:6px">' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Subtotal:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.subtotal || inv.total)+'</span></div>' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Discount:</span> <span style="font-family:var(--font-mono)">-'+fmtGHS(inv.discount || 0)+'</span></div>' +
@@ -1025,28 +1085,16 @@ function buildInvoiceHTML(inv) {
     '<div style="padding:8px 14px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;background:var(--gray-50)">' +
       '<span style="font-size:11px;color:var(--gray-400);font-style:italic">Goods sold out are not returnable</span>' +
       statusBadge(inv.status) +
-      (inv.payMethod
-        ? '&nbsp;&nbsp;<span class="badge badge-neutral">'+(inv.payMethod==='momo'?'📱 Mobile Money':'💵 Cash')+'</span>'
-        : '') +
-      (inv.momoNumber
-        ? '&nbsp;<span style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">'+escapeHtml(inv.momoNumber)+'</span>'
-        : '') +
+      (inv.payMethod ? '&nbsp;&nbsp;<span class="badge badge-neutral">'+(inv.payMethod==='momo'?'📱 Mobile Money':'💵 Cash')+'</span>' : '') +
+      (inv.momoNumber ? '&nbsp;<span style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">'+escapeHtml(inv.momoNumber)+'</span>' : '') +
     '</div>' +
 
-    
-
-    '<div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">' +
+    '<div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono);padding:6px 14px">' +
       'Location: '+escapeHtml(inv.location)+' · By: '+escapeHtml(inv.createdByName || 'Unknown')+' · '+fmtDateTime(inv.createdAt) +
     '</div>' +
 
-    (inv.notes
-      ? '<div style="margin-top:10px;padding:10px;background:var(--gray-50);border-radius:var(--radius);font-size:13px;color:var(--gray-600)">'+escapeHtml(inv.notes)+'</div>'
-      : '') +
-
-    (inv.deleted
-      ? '<div style="margin-top:10px;padding:8px 12px;background:#fee2e2;border-radius:var(--radius);font-size:12px;color:#991b1b">⚠ Deleted by '+escapeHtml(inv.deletedBy)+' on '+fmtDateTime(inv.deletedAt)+'</div>'
-      : '') +
-
+    (inv.notes ? '<div style="margin-top:10px;padding:10px;background:var(--gray-50);border-radius:var(--radius);font-size:13px;color:var(--gray-600)">'+escapeHtml(inv.notes)+'</div>' : '') +
+    (inv.deleted ? '<div style="margin-top:10px;padding:8px 12px;background:#fee2e2;border-radius:var(--radius);font-size:12px;color:#991b1b">⚠ Deleted by '+escapeHtml(inv.deletedBy)+' on '+fmtDateTime(inv.deletedAt)+'</div>' : '') +
   '</div>';
 }
 
@@ -1082,15 +1130,208 @@ function copyInvoiceText() {
   try { navigator.clipboard.writeText(generateInvoiceText(inv)); toast('Invoice copied!'); } catch(e){ toast('Could not copy','error'); }
 }
 
+// ============================================================
+// FIX #3: Share invoice — works on all platforms
+// Uses native share if available (mobile), otherwise WhatsApp
+// with a copy-to-clipboard fallback for long text
+// ============================================================
+function shareInvoice() {
+  const inv = getAllInvoices().find(i => i.id === viewingInvoiceId);
+  if (!inv) return;
+
+  const text = generateInvoiceText(inv);
+
+  // Try native Web Share API (works on mobile browsers with HTTPS)
+  if (navigator.share) {
+    navigator.share({
+      title: 'Invoice ' + inv.number + ' — ' + inv.customerName,
+      text: text
+    }).catch(err => {
+      // User cancelled or API failed — fall through to manual share
+      if (err && err.name !== 'AbortError') {
+        _shareViaWhatsAppOrCopy(inv, text);
+      }
+    });
+    return;
+  }
+
+  // No native share — open share sheet manually
+  _shareViaWhatsAppOrCopy(inv, text);
+}
+
+function _shareViaWhatsAppOrCopy(inv, text) {
+  // Build share sheet overlay
+  const existing = document.getElementById('share-sheet-overlay');
+  if (existing) existing.remove();
+
+  // Truncate for WhatsApp URL (max ~2000 chars safe)
+  const shortText = text.length > 1500
+    ? text.substring(0, 1480) + '\n...\n(See full invoice in app)'
+    : text;
+
+  const waUrl = 'https://wa.me/?text=' + encodeURIComponent(shortText);
+
+  const overlay = document.createElement('div');
+  overlay.id = 'share-sheet-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:flex-end;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:16px 16px 0 0;padding:24px;width:100%;max-width:480px;box-shadow:0 -4px 24px rgba(0,0,0,0.15)">
+      <div style="font-weight:700;font-size:16px;margin-bottom:6px">Share Invoice ${escapeHtml(inv.number)}</div>
+      <div style="font-size:13px;color:#666;margin-bottom:20px">${escapeHtml(inv.customerName)} · ${fmtGHS(inv.total)}</div>
+      <div style="display:grid;gap:10px">
+        <a href="${escapeHtml(waUrl)}" target="_blank" rel="noopener"
+           style="display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #e5e7eb;border-radius:10px;text-decoration:none;color:inherit;font-size:14px;font-weight:500"
+           onclick="document.getElementById('share-sheet-overlay').remove()">
+          <span style="font-size:24px">💬</span> Share via WhatsApp
+        </a>
+        <button onclick="_copyAndCloseShare()" 
+           style="display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #e5e7eb;border-radius:10px;background:white;cursor:pointer;font-size:14px;font-weight:500;width:100%;text-align:left">
+          <span style="font-size:24px">📋</span> Copy invoice text
+        </button>
+        <button onclick="_sendViaSMS()"
+           style="display:flex;align-items:center;gap:12px;padding:14px 16px;border:1px solid #e5e7eb;border-radius:10px;background:white;cursor:pointer;font-size:14px;font-weight:500;width:100%;text-align:left">
+          <span style="font-size:24px">📱</span> Send as SMS
+        </button>
+      </div>
+      <button onclick="document.getElementById('share-sheet-overlay').remove()"
+         style="margin-top:14px;width:100%;padding:12px;border:none;background:#f3f4f6;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer">
+        Cancel
+      </button>
+    </div>
+  `;
+
+  // Close on backdrop click
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+
+  // Store text for copy/SMS actions
+  window._pendingShareText = text;
+  window._pendingShareInv  = inv;
+}
+
+function _copyAndCloseShare() {
+  const text = window._pendingShareText || '';
+  navigator.clipboard.writeText(text)
+    .then(() => toast('Invoice text copied to clipboard!'))
+    .catch(() => {
+      // Fallback for browsers without clipboard API
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity  = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      toast('Invoice text copied!');
+    });
+  const overlay = document.getElementById('share-sheet-overlay');
+  if (overlay) overlay.remove();
+}
+
+function _sendViaSMS() {
+  const inv  = window._pendingShareInv;
+  const text = window._pendingShareText || '';
+  const phone = inv?.customerPhone ? inv.customerPhone.replace(/\s+/g,'') : '';
+  const smsUrl = phone
+    ? 'sms:' + phone + '?body=' + encodeURIComponent(text.substring(0, 800))
+    : 'sms:?body=' + encodeURIComponent(text.substring(0, 800));
+  window.open(smsUrl, '_blank');
+  const overlay = document.getElementById('share-sheet-overlay');
+  if (overlay) overlay.remove();
+}
+
+// ============================================================
+// FIX #1: Mark as Paid — waits for cache before refreshing modal
+// ============================================================
+async function markViewingInvoicePaid() {
+  const inv = getAllInvoices().find(i=>i.id===viewingInvoiceId);
+  if (!inv) return;
+  if (!requireInvoiceEdit(inv, 'mark paid')) return;
+
+  // Show inline payment method picker instead of browser prompt
+  _showMarkPaidDialog(inv);
+}
+
+function _showMarkPaidDialog(inv) {
+  const existing = document.getElementById('mark-paid-overlay');
+  if (existing) existing.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'mark-paid-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center';
+  overlay.innerHTML = `
+    <div style="background:white;border-radius:12px;padding:24px;width:100%;max-width:360px;box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+      <div style="font-weight:700;font-size:16px;margin-bottom:4px">Mark Invoice as Paid</div>
+      <div style="font-size:13px;color:#666;margin-bottom:20px">Invoice ${escapeHtml(inv.number)} · ${fmtGHS(inv.total)}</div>
+
+      <div style="font-size:13px;font-weight:600;margin-bottom:10px">Payment Method</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+        <button id="mpd-cash" onclick="_selectMpdMethod('cash')"
+          style="padding:14px;border:2px solid #e5e7eb;border-radius:10px;background:white;cursor:pointer;font-size:14px;font-weight:500">
+          💵 Cash
+        </button>
+        <button id="mpd-momo" onclick="_selectMpdMethod('momo')"
+          style="padding:14px;border:2px solid #e5e7eb;border-radius:10px;background:white;cursor:pointer;font-size:14px;font-weight:500">
+          📱 MoMo
+        </button>
+      </div>
+
+      <div id="mpd-momo-row" style="display:none;margin-bottom:16px">
+        <label style="font-size:13px;font-weight:500;display:block;margin-bottom:6px">MoMo Number (optional)</label>
+        <input id="mpd-momo-number" type="tel" placeholder="e.g. 0244123456"
+          style="width:100%;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;font-size:13px;box-sizing:border-box">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <button onclick="document.getElementById('mark-paid-overlay').remove()"
+          style="padding:12px;border:1px solid #e5e7eb;border-radius:8px;background:white;cursor:pointer;font-size:13px;font-weight:500">
+          Cancel
+        </button>
+        <button onclick="_confirmMarkPaid('${escapeHtml(inv.id)}')"
+          style="padding:12px;border:none;border-radius:8px;background:var(--brand-brown,#5C2D0A);color:white;cursor:pointer;font-size:13px;font-weight:600">
+          Confirm Paid
+        </button>
+      </div>
+    </div>
+  `;
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  window._mpdMethod = '';
+}
+
+function _selectMpdMethod(method) {
+  window._mpdMethod = method;
+  const on  = 'padding:14px;border:2px solid var(--brand-brown,#5C2D0A);border-radius:10px;background:#fdf8f3;cursor:pointer;font-size:14px;font-weight:600';
+  const off = 'padding:14px;border:2px solid #e5e7eb;border-radius:10px;background:white;cursor:pointer;font-size:14px;font-weight:500';
+  document.getElementById('mpd-cash').style.cssText = method === 'cash' ? on : off;
+  document.getElementById('mpd-momo').style.cssText = method === 'momo' ? on : off;
+  document.getElementById('mpd-momo-row').style.display = method === 'momo' ? 'block' : 'none';
+}
+
+async function _confirmMarkPaid(invId) {
+  if (!window._mpdMethod) { toast('Please select Cash or MoMo', 'error'); return; }
+  const momoNumber = document.getElementById('mpd-momo-number')?.value.trim() || '';
+
+  const overlay = document.getElementById('mark-paid-overlay');
+  if (overlay) overlay.remove();
+
+  // FIX #1: updateInvoice now awaits cache sync before calling viewInvoice
+  await updateInvoice(invId, {
+    status: 'paid',
+    payMethod: window._mpdMethod,
+    momoNumber
+  });
+}
+
 function generateInvoiceText(inv) {
   const sep = '─'.repeat(58);
-
   const rows = inv.items.map(item => {
-    const qty = String(item.qty || '').padEnd(5);
-    const name = String(item.name || '').substring(0, 28).padEnd(28);
-    const unit = Number(item.price || 0).toFixed(2).padStart(10);
+    const qty    = String(item.qty || '').padEnd(5);
+    const label  = item.priceType ? `${item.name} (${priceTypeLabel(item.priceType)})` : item.name;
+    const name   = String(label || '').substring(0, 28).padEnd(28);
+    const unit   = Number(item.price || 0).toFixed(2).padStart(10);
     const amount = Number(item.total || 0).toFixed(2).padStart(11);
-
     return `${qty} ${name} ${unit} ${amount}`;
   }).join('\n');
 
@@ -1125,6 +1366,8 @@ ${sep}
 ${rows}
 ${sep}
 
+Subtotal: ${fmtGHS(inv.subtotal || inv.total)}
+Discount: ${fmtGHS(inv.discount || 0)}
 Total: ${fmtGHS(inv.total)}
 
 Status: ${String(inv.status || '').toUpperCase()}
@@ -1135,6 +1378,254 @@ Goods sold out are not returnable.
 `.trim();
 }
 
+// ==========================
+// INVOICE EDIT FEATURE
+// ==========================
+let editingInvoiceId = null;
+
+function openEditInvoiceModal(id) {
+  const inv = getAllInvoices().find(i => i.id === id);
+  if (!inv) return;
+  if (!requireInvoiceEdit(inv, 'edit')) return;
+
+  editingInvoiceId = id;
+
+  document.querySelector('#edit-customer-name').value = inv.customerName || '';
+  document.querySelector('#edit-phone').value         = inv.customerPhone || '';
+  document.querySelector('#edit-address').value       = inv.customerAddress || '';
+  document.querySelector('#edit-notes').value         = inv.notes || '';
+  document.querySelector('#edit-status').value        = inv.status || 'pending';
+  document.querySelector('#edit-pay-method').value    = inv.payMethod || '';
+
+  // FIX #2 / #6: renderEditItems pulls fresh products each time
+  renderEditItems(inv.items || []);
+
+  openModal('edit-invoice-modal');
+}
+
+async function saveEditedInvoice() {
+  const id       = editingInvoiceId;
+  const existing = getAllInvoices().find(i => i.id === id);
+  if (!requireInvoiceEdit(existing, 'edit')) return;
+
+  const items = collectEditedItems();
+  if (!items.length) { toast('Add at least one item', 'error'); return; }
+
+  const status    = document.querySelector('#edit-status').value || 'pending';
+  const payMethod = status === 'paid' ? document.querySelector('#edit-pay-method').value : '';
+  if (status === 'paid' && !payMethod) { toast('Select a payment method for paid invoices', 'error'); return; }
+
+  const subtotal = calculateTotal(items);
+  const updates  = {
+    customerName:    document.querySelector('#edit-customer-name').value.trim(),
+    customerPhone:   document.querySelector('#edit-phone').value.trim(),
+    customerAddress: document.querySelector('#edit-address').value.trim(),
+    notes:           document.querySelector('#edit-notes').value.trim(),
+    status,
+    payMethod,
+    items,
+    subtotal,
+    total: Math.max(0, subtotal - (existing.discount || 0)),
+  };
+
+  const saved = await updateInvoice(id, updates);
+  if (saved) closeModal('edit-invoice-modal');
+}
+
+// ============================================================
+// FIX #1 + #6: updateInvoice — awaits cache before re-rendering
+// ============================================================
+async function updateInvoice(id, updates) {
+  const existing = getAllInvoices().find(i => i.id === id) || {};
+  if (!requireInvoiceEdit(existing, 'edit')) return false;
+
+  const itemsExplicitlyChanged = Object.prototype.hasOwnProperty.call(updates, 'items');
+  const mergedUpdates = {
+    ...existing,
+    ...updates,
+    items: itemsExplicitlyChanged ? updates.items : existing.items,
+    // FIX BUG 1: Flag tells updateInvoiceNoStock whether to touch invoice_items
+    // When marking paid (no items in updates), this is false → items are NEVER deleted
+    _itemsChanged: itemsExplicitlyChanged
+  };
+
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const res = await window.LumodaSupabase.updateInvoiceNoStock(id, mergedUpdates);
+      if (res.error) throw res.error;
+
+      // FIX #1: Wait for full cache sync BEFORE re-rendering the modal
+      await syncSupabaseCache();
+
+      addAudit('Invoice Edited', currentUser.fullName+' edited invoice '+id+' [server]');
+      toast('Invoice updated');
+
+      // Now re-render — cache is fresh so status/items show correctly
+      viewInvoice(id);
+      renderPage('invoices');
+      renderDashboard();
+      return true;
+    } catch (err) {
+      toast(err.message || 'Could not update invoice', 'error');
+      return false;
+    }
+  }
+
+  // Local storage path
+  const invoices = LS.get('lumoda_invoices') || [];
+  const idx      = invoices.findIndex(i => i.id === id);
+  if (idx < 0) return false;
+
+  invoices[idx] = {
+    ...invoices[idx],
+    ...mergedUpdates,
+    updatedAt: Date.now(),
+    updatedBy: currentUser?.username
+  };
+  LS.set('lumoda_invoices', invoices);
+
+  addAudit('Invoice Edited', currentUser.fullName+' edited invoice '+(invoices[idx].number || id)+' [local]');
+  toast('Invoice updated');
+
+  // FIX #1: re-read from updated localStorage — will show new status immediately
+  viewInvoice(id);
+  renderPage('invoices');
+  renderDashboard();
+  return true;
+}
+
+function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + (Number(item.qty || 0) * Number(item.price || 0)), 0);
+}
+
+// FIX #2/#6: renderEditItems always uses fresh product list
+function renderEditItems(items) {
+  const container = document.getElementById('edit-items-container');
+  if (!container) return;
+  container.innerHTML = '';
+  (items || []).forEach(item => addItem(item));
+  calcEditTotal();
+}
+
+// FIX #5: qty starts empty in edit modal too
+function addItem(item = {}) {
+  const container = document.getElementById('edit-items-container');
+  if (!container) return;
+
+  const uid = 'edit-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+
+  // FIX #2: Always get fresh products at the moment the row is created
+  const opts = getProducts()
+    .map(p => `<option value="${escAttr(p.name)}">${escapeHtml(p.name)}</option>`)
+    .join('');
+
+  const row = document.createElement('div');
+  row.className = 'line-item-row';
+  row.id = uid;
+
+  // qty: empty placeholder unless editing existing item
+  const qtyVal   = item.qty   != null ? escAttr(item.qty)   : '';
+  const priceVal = item.price != null ? escAttr(item.price) : '';
+
+  row.innerHTML = `
+    <input type="text"
+      list="pl-${uid}"
+      placeholder="Product name"
+      value="${escAttr(item.name || '')}"
+      oninput="onEditItemInput('${uid}')"
+      onchange="onEditItemInput('${uid}')"
+      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
+    <datalist id="pl-${uid}">${opts}</datalist>
+
+    <select onchange="onEditItemInput('${uid}')"
+      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
+      <option value="retail"    ${(item.priceType || 'retail') === 'retail'    ? 'selected' : ''}>Retail</option>
+      <option value="wholesale" ${item.priceType === 'wholesale' ? 'selected' : ''}>Wholesale</option>
+      <option value="carton"    ${item.priceType === 'carton'    ? 'selected' : ''}>Carton</option>
+    </select>
+
+    <input type="number" value="${qtyVal}" min="1" placeholder="Qty" oninput="calcEditTotal()"
+      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
+
+    <input type="number" value="${priceVal}" min="0" step="0.01" placeholder="0.00"
+      readonly title="Price is set automatically"
+      oninput="calcEditTotal()"
+      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">
+
+    <button type="button" class="remove-item" onclick="(function(){var r=document.getElementById('${uid}');if(r)r.remove();calcEditTotal();})();">×</button>
+  `;
+
+  container.appendChild(row);
+  calcEditTotal();
+}
+
+function onEditItemInput(uid) {
+  const row = document.getElementById(uid);
+  if (!row) return;
+
+  const inputs     = row.querySelectorAll('input');
+  const priceInput = inputs[2];
+  const name       = inputs[0].value.trim();
+  const priceType  = row.querySelector('select')?.value || 'retail';
+
+  const product = getProducts().find(p =>
+    p.name.toLowerCase() === name.toLowerCase()
+  );
+
+  if (product) {
+    const newPrice = productPriceForType(product, priceType);
+    // Must remove readonly to set value programmatically then restore
+    priceInput.removeAttribute('readonly');
+    priceInput.value = Number(newPrice).toFixed(2);
+    priceInput.setAttribute('readonly', '');
+    // Flash green to confirm price updated
+    priceInput.style.borderColor = '#16a34a';
+    priceInput.style.color = '#166534';
+    setTimeout(() => {
+      priceInput.style.borderColor = '';
+      priceInput.style.color = 'var(--gray-400)';
+    }, 1000);
+  }
+
+  calcEditTotal();
+}
+
+function collectEditedItems() {
+  const rows  = document.querySelectorAll('#edit-items-container .line-item-row');
+  const items = [];
+  rows.forEach(row => {
+    const inputs    = row.querySelectorAll('input');
+    const name      = inputs[0].value.trim();
+    const priceType = row.querySelector('select')?.value || 'retail';
+    const qty       = parseInt(inputs[1].value) || 0;
+    // Read price robustly — handle readonly fields in all browsers
+    const priceInput = inputs[2];
+    const price = parseFloat(priceInput.value) ||
+                  parseFloat(priceInput.getAttribute('value')) || 0;
+    if (name && qty > 0 && price > 0) {
+      items.push({ name, priceType, qty, price, total: qty * price });
+    }
+  });
+  return items;
+}
+
+function calcEditTotal() {
+  const el = document.getElementById('edit-invoice-total-display');
+  if (!el) return;
+  const items    = collectEditedItems();
+  const subtotal = calculateTotal(items);
+  el.textContent = items.length > 0
+    ? 'Subtotal: ' + fmtGHS(subtotal) + '  |  Items: ' + items.length
+    : 'Total: GH₵ 0.00';
+}
+
+function loadProductSuggestions(products) {
+  const list = document.getElementById('product-list');
+  if (!list) return;
+  list.innerHTML = products.map(p => `<option value="${escAttr(p.name)}"></option>`).join('');
+  // Also refresh any open line item datalists
+  refreshAllLineItemDataLists();
+}
 
 // ============================================================
 // CUSTOMERS
@@ -1193,7 +1684,6 @@ function selectCustomerSuggestion(name,phone,addr) { document.getElementById('in
 // ============================================================
 let productSearch = '';
 function renderProducts() {
-  // Show admin-only buttons
   const csvBtn   = document.getElementById('btn-import-csv');
   const addBtn   = document.getElementById('btn-add-product');
   const orderBtn = document.getElementById('btn-order-stock');
@@ -1207,13 +1697,71 @@ function renderProducts() {
     const sA=p.stockAlabar,sM=p.stockMorocco,comb=effLoc==='Morocco'?sM:effLoc==='Alabar'?sA:Math.min(sA,sM);
     const adjBtn=isAdmin()?'<button class="btn btn-secondary btn-sm" onclick="openStockAdjust(\''+p.id+'\')">Adjust</button>':'';
     const editBtn=isAdmin()?'<button class="btn btn-secondary btn-sm" onclick="editProduct(\''+p.id+'\')">Edit</button>':'';
-    return '<tr><td style="font-weight:500">'+escapeHtml(p.name)+'</td><td class="mono">'+escapeHtml(p.sku)+'</td><td style="color:var(--gray-400)">'+escapeHtml(p.category)+'</td><td class="mono">'+fmtGHS(p.price)+'</td><td class="mono" style="text-align:center;color:'+(sA<=p.reorder?'#dc2626':'inherit')+'">'+sA+'</td><td class="mono" style="text-align:center;color:'+(sM<=p.reorder?'#dc2626':'inherit')+'">'+sM+'</td><td>'+stockBadge(comb,p.reorder)+'</td><td class="mono" style="color:var(--gray-400)">'+p.reorder+'</td><td style="display:flex;gap:6px">'+adjBtn+editBtn+'</td></tr>';
+    const priceHtml = '<div class="mono">'+fmtGHS(p.price)+'</div><div style="font-size:11px;color:var(--gray-400)">W: '+fmtGHS(p.wholesalePrice)+' · C: '+fmtGHS(p.cartonPrice)+'</div>';
+    return '<tr><td style="font-weight:500">'+escapeHtml(p.name)+'</td><td class="mono">'+escapeHtml(p.sku)+'</td><td style="color:var(--gray-400)">'+escapeHtml(p.category)+'</td><td>'+priceHtml+'</td><td class="mono" style="text-align:center;color:'+(sA<=p.reorder?'#dc2626':'inherit')+'">'+sA+'</td><td class="mono" style="text-align:center;color:'+(sM<=p.reorder?'#dc2626':'inherit')+'">'+sM+'</td><td>'+stockBadge(comb,p.reorder)+'</td><td class="mono" style="color:var(--gray-400)">'+p.reorder+'</td><td style="display:flex;gap:6px">'+adjBtn+editBtn+'</td></tr>';
   }).join('');
 }
 function filterProducts(val){productSearch=val;renderProducts();}
-function openProductModal(){if(!requireAdmin('add products'))return;editingProductId=null;document.getElementById('prod-modal-title').textContent='New Product';['prod-name','prod-sku','prod-category','prod-price','prod-stock-alabar','prod-stock-morocco','prod-reorder'].forEach(id=>document.getElementById(id).value='');openModal('product-modal');}
-function editProduct(id){if(!requireAdmin('edit products'))return;const prod=getProducts().find(p=>p.id===id);if(!prod)return;editingProductId=id;document.getElementById('prod-modal-title').textContent='Edit Product';document.getElementById('prod-name').value=prod.name;document.getElementById('prod-sku').value=prod.sku;document.getElementById('prod-category').value=prod.category;document.getElementById('prod-price').value=prod.price;document.getElementById('prod-stock-alabar').value=prod.stockAlabar;document.getElementById('prod-stock-morocco').value=prod.stockMorocco;document.getElementById('prod-reorder').value=prod.reorder;openModal('product-modal');}
-function saveProduct(){if(!requireAdmin('save products'))return;const name=document.getElementById('prod-name').value.trim();const price=parseFloat(document.getElementById('prod-price').value);if(!name||isNaN(price)){toast('Name and price required','error');return;}const products=getProducts();const sA=parseInt(document.getElementById('prod-stock-alabar').value)||0;const sM=parseInt(document.getElementById('prod-stock-morocco').value)||0;const reorder=parseInt(document.getElementById('prod-reorder').value)||5;const sku=document.getElementById('prod-sku').value.trim()||'SKU-'+Date.now();const cat=document.getElementById('prod-category').value.trim()||'General';if(editingProductId){const idx=products.findIndex(p=>p.id===editingProductId);if(idx>=0){products[idx]={...products[idx],name,sku,category:cat,price,stockAlabar:sA,stockMorocco:sM,reorder};addAudit('Product Updated',currentUser.fullName+' updated "'+name+'" price: '+fmtGHS(price));}}else{products.push({id:'p_'+Date.now(),name,sku,category:cat,price,stockAlabar:sA,stockMorocco:sM,reorder});addAudit('Product Added',currentUser.fullName+' added "'+name+'" @ '+fmtGHS(price));}LS.set('lumoda_products',products);closeModal('product-modal');toast('Product saved');renderProducts();}
+function openProductModal(){if(!requireAdmin('add products'))return;editingProductId=null;document.getElementById('prod-modal-title').textContent='New Product';['prod-name','prod-sku','prod-category','prod-price','prod-wholesale-price','prod-carton-price','prod-stock-alabar','prod-stock-morocco','prod-reorder'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});openModal('product-modal');}
+function editProduct(id){if(!requireAdmin('edit products'))return;const prod=getProducts().find(p=>p.id===id);if(!prod)return;editingProductId=id;document.getElementById('prod-modal-title').textContent='Edit Product';document.getElementById('prod-name').value=prod.name;document.getElementById('prod-sku').value=prod.sku;document.getElementById('prod-category').value=prod.category;document.getElementById('prod-price').value=prod.price;document.getElementById('prod-wholesale-price').value=prod.wholesalePrice;document.getElementById('prod-carton-price').value=prod.cartonPrice;document.getElementById('prod-stock-alabar').value=prod.stockAlabar;document.getElementById('prod-stock-morocco').value=prod.stockMorocco;document.getElementById('prod-reorder').value=prod.reorder;openModal('product-modal');}
+
+async function saveProduct(){
+  if(!requireAdmin('save products'))return;
+  const name=document.getElementById('prod-name').value.trim();
+  const price=parseFloat(document.getElementById('prod-price').value);
+  if(!name||isNaN(price)){toast('Name and retail price required','error');return;}
+  const wholesalePrice=parseFloat(document.getElementById('prod-wholesale-price').value);
+  const cartonPrice=parseFloat(document.getElementById('prod-carton-price').value);
+  const products=getProducts();
+  const sA=parseInt(document.getElementById('prod-stock-alabar').value)||0;
+  const sM=parseInt(document.getElementById('prod-stock-morocco').value)||0;
+  const reorder=parseInt(document.getElementById('prod-reorder').value)||5;
+  const sku=document.getElementById('prod-sku').value.trim()||'SKU-'+Date.now();
+  const cat=document.getElementById('prod-category').value.trim()||'General';
+  const payload={
+    id:editingProductId,
+    name,sku,category:cat,
+    price,retailPrice:price,
+    wholesalePrice:isNaN(wholesalePrice)?price:wholesalePrice,
+    cartonPrice:isNaN(cartonPrice)?(isNaN(wholesalePrice)?price:wholesalePrice):cartonPrice,
+    stockAlabar:sA,stockMorocco:sM,reorder
+  };
+
+  if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&window.LumodaSupabase.saveProduct){
+    try{
+      const res=await window.LumodaSupabase.saveProduct(payload);
+      if(res.error)throw res.error;
+      await syncSupabaseCache();
+      // FIX #2: syncSupabaseCache already calls refreshAllLineItemDataLists
+      addAudit(editingProductId?'Product Updated':'Product Added',currentUser.fullName+' saved "'+name+'" [server]');
+      closeModal('product-modal');
+      toast('Product saved');
+      renderProducts();
+      return;
+    }catch(err){
+      toast(err.message||'Could not save product','error');
+      return;
+    }
+  }
+
+  // Local storage path
+  if(editingProductId){
+    const idx=products.findIndex(p=>p.id===editingProductId);
+    if(idx>=0){products[idx]={...products[idx],...payload};addAudit('Product Updated',currentUser.fullName+' updated "'+name+'"');}
+  }else{
+    products.push({...payload,id:'p_'+Date.now()});
+    addAudit('Product Added',currentUser.fullName+' added "'+name+'" @ '+fmtGHS(price));
+  }
+  LS.set('lumoda_products',normalizeProducts(products));
+
+  // FIX #2: Refresh all open datalists immediately after local save
+  loadProductSuggestions(getProducts());
+
+  closeModal('product-modal');
+  toast('Product saved');
+  renderProducts();
+}
+
 function orderStock(){if(!requireAdmin('order stock'))return;const low=getProducts().filter(p=>p.stockAlabar<=p.reorder||p.stockMorocco<=p.reorder);if(low.length===0){toast('No restocking needed');return;}const text='LUMODA ENTERPRISE — Restock Order\n\n'+low.map(p=>'• '+p.name+' ('+p.sku+')\n  Alabar: '+p.stockAlabar+' | Morocco: '+p.stockMorocco+' | Reorder at: '+p.reorder).join('\n');try{navigator.clipboard.writeText(text);toast('Restock list copied');}catch{alert(text);}}
 
 // ============================================================
@@ -1222,8 +1770,54 @@ function orderStock(){if(!requireAdmin('order stock'))return;const low=getProduc
 let adjustingProductId=null;
 function openStockAdjust(pid){if(!requireAdmin('adjust stock'))return;adjustingProductId=pid;const prod=getProducts().find(p=>p.id===pid);if(!prod)return;document.getElementById('stock-prod-name').value=prod.name;document.getElementById('stock-qty').value='';document.getElementById('stock-note').value='';document.getElementById('stock-type').value='Purchase';openModal('stock-modal');}
 function applyStockAdjustment(){if(!requireAdmin('adjust stock'))return;const loc=document.getElementById('stock-location').value;const type=document.getElementById('stock-type').value;const qty=parseInt(document.getElementById('stock-qty').value);const note=document.getElementById('stock-note').value.trim();if(isNaN(qty)||qty===0){toast('Enter a valid quantity','error');return;}const products=getProducts();const idx=products.findIndex(p=>p.id===adjustingProductId);if(idx<0)return;const prod=products[idx];const isAdd=['Purchase','Return'].includes(type);const absQty=Math.abs(qty);const change=isAdd?absQty:-absQty;if(loc==='Alabar'){if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}products[idx].stockAlabar=Math.max(0,prod.stockAlabar+change);}else{if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}products[idx].stockMorocco=Math.max(0,prod.stockMorocco+change);}LS.set('lumoda_products',products);addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" '+(change>0?'+':'')+change+' at '+loc+' ('+type+')');closeModal('stock-modal');toast('Stock updated');renderProducts();renderDashboard();}
-function addStockHistory(productId,productName,location,change,type,note){const h=getStockHistory();h.unshift({id:'sh_'+Date.now(),productId,productName,location,change,type,note,by:currentUser.username,byName:currentUser.fullName,createdAt:Date.now()});LS.set('lumoda_stockhistory',h);}
-function renderStockHistory(){let h=filterByLoc(getStockHistory());h.sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt));document.getElementById('stockhistory-body').innerHTML=h.length===0?'<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No stock history yet</td></tr>':h.map(x=>'<tr><td class="mono">'+fmtDateTime(x.createdAt)+'</td><td><span class="badge badge-neutral">'+escapeHtml(x.type)+'</span></td><td>'+escapeHtml(x.productName)+'</td><td>'+escapeHtml(x.location)+'</td><td class="mono" style="color:'+(x.change>0?'#16a34a':'#dc2626')+'">'+(x.change>0?'+':'')+x.change+'</td><td>'+escapeHtml(x.note||'—')+'</td><td>'+escapeHtml(x.byName||x.by)+'</td></tr>').join('');}
+function addStockHistory(productId, productName, location, change, type, note) {
+  // Write to localStorage immediately
+  const h = getStockHistory();
+  h.unshift({
+    id: 'sh_'+Date.now(),
+    productId, productName, location, change, type, note,
+    by: currentUser.username,
+    byName: currentUser.fullName,
+    createdAt: Date.now()
+  });
+  LS.set('lumoda_stockhistory', h);
+
+  // FIX BUG 3: Write to Supabase stock_history table
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured() && currentUser) {
+    void window.LumodaSupabase.logStockHistory({
+      productId, productName, location, change, type, note: note || ''
+    }).catch(err => { console.warn('Server stock history write failed:', err); });
+  }
+}
+async function renderStockHistory() {
+  // FIX BUG 3: Load from Supabase first, fall back to localStorage
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const serverHistory = await window.LumodaSupabase.loadStockHistory();
+      if (Array.isArray(serverHistory) && serverHistory.length > 0) {
+        LS.set('lumoda_stockhistory', serverHistory);
+      }
+    } catch (e) {
+      console.warn('Could not load stock history from server:', e);
+    }
+  }
+
+  let h = filterByLoc(getStockHistory());
+  h.sort((a, b) => asTimestamp(b.createdAt) - asTimestamp(a.createdAt));
+  document.getElementById('stockhistory-body').innerHTML = h.length === 0
+    ? '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No stock history yet</td></tr>'
+    : h.map(x =>
+        '<tr>' +
+        '<td class="mono">' + fmtDateTime(x.createdAt) + '</td>' +
+        '<td><span class="badge badge-neutral">' + escapeHtml(x.type) + '</span></td>' +
+        '<td>' + escapeHtml(x.productName) + '</td>' +
+        '<td>' + escapeHtml(x.location) + '</td>' +
+        '<td class="mono" style="color:' + (x.change > 0 ? '#16a34a' : '#dc2626') + '">' + (x.change > 0 ? '+' : '') + x.change + '</td>' +
+        '<td>' + escapeHtml(x.note || '—') + '</td>' +
+        '<td>' + escapeHtml(x.byName || x.by) + '</td>' +
+        '</tr>'
+      ).join('');
+}
 function filterStockHistory(val){const q=val.toLowerCase();document.querySelectorAll('#stockhistory-body tr').forEach(tr=>tr.style.display=tr.textContent.toLowerCase().includes(q)?'':'none');}
 
 // ============================================================
@@ -1235,8 +1829,6 @@ function renderLocationBreakdown(invoices){const locs=['Alabar','Morocco'];docum
 function renderTopProducts(invoices){const map={};invoices.forEach(inv=>inv.items.forEach(it=>{map[it.name]=(map[it.name]||0)+it.total;}));const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);document.getElementById('top-products').innerHTML=top.length?top.map(([n,t],i)=>'<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--gray-100)"><span>'+(i+1)+'. '+escapeHtml(n)+'</span><strong>'+fmtGHS(t)+'</strong></div>').join(''):'<div style="color:var(--gray-400);font-size:13px">No product sales yet</div>';}
 function renderMonthlyChart(invoices){const months=[];const now=new Date();for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const next=new Date(d.getFullYear(),d.getMonth()+1,1);const total=invoices.filter(inv=>{const t=asTimestamp(inv.createdAt);return t>=d&&t<next;}).reduce((s,inv)=>s+inv.total,0);months.push({label:d.toLocaleDateString('en',{month:'short'}),total});}const max=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/max*120);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total):'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');}
 
-
-
 // ============================================================
 // SESSIONS PANEL
 // ============================================================
@@ -1244,50 +1836,30 @@ function buildSessionsHtml(sessions) {
   return sessions.length
     ? sessions.map(s =>
         '<div style="display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--gray-50)">' +
-        '<span><span class="session-dot"></span>' +
-        escapeHtml(s.fullName || '') +
-        ' <span class="mono">@' +
-        escapeHtml(s.username || '') +
-        '</span></span>' +
-        '<span class="mono" style="color:var(--gray-400)">' +
-        escapeHtml(s.location || '') +
-        ' · ' +
-        fmtAgo(s.lastActivity) +
-        '</span></div>'
+        '<span><span class="session-dot"></span>' + escapeHtml(s.fullName || '') +
+        ' <span class="mono">@' + escapeHtml(s.username || '') + '</span></span>' +
+        '<span class="mono" style="color:var(--gray-400)">' + escapeHtml(s.location || '') + ' · ' + fmtAgo(s.lastActivity) + '</span></div>'
       ).join('')
     : '<div style="padding:16px;color:var(--gray-400);font-size:13px">No active sessions</div>';
 }
 
 function renderSessionsPanel(){
   const panel = document.getElementById('active-sessions-panel');
-
-  if (panel && !isAdmin()) {
-    panel.style.display = 'none';
-    return;
-  }
-
+  if (panel && !isAdmin()) { panel.style.display = 'none'; return; }
   if (panel) panel.style.display = 'block';
-
   const sessions = getSessions();
-
   const countEl = document.getElementById('active-sessions-count');
   if (countEl) countEl.textContent = sessions.length + ' active';
-
   const listEl = document.getElementById('active-sessions-list');
-
-  if (listEl) {
-    listEl.innerHTML = buildSessionsHtml(sessions);
-  }
-
+  if (listEl) listEl.innerHTML = buildSessionsHtml(sessions);
   const usersCountEl = document.getElementById('sessions-count-users');
   if (usersCountEl) usersCountEl.textContent = sessions.length + ' active';
-
   const usersListEl = document.getElementById('sessions-list-users');
   if (usersListEl) usersListEl.innerHTML = buildSessionsHtml(sessions);
 }
 
 // ============================================================
-// USER MANAGEMENT (admin only)
+// USER MANAGEMENT
 // ============================================================
 async function renderUsers() {
   if(!isAdmin()){navigate('dashboard',null);return;}
@@ -1298,84 +1870,54 @@ async function renderUsers() {
     try {
       const profiles = await window.LumodaSupabase.loadProfiles();
       users = profiles.map(profile => ({
-        id: profile.id,
-        email: profile.email || '',
-        username: profile.username,
-        fullName: profile.full_name,
-        role: profile.role,
-        location: profile.location,
-        active: profile.active !== false,
-        mustChangePassword: !!profile.must_change_password,
-        lockedUntil: null,
-        lastLogin: null
+        id: profile.id, email: profile.email || '', username: profile.username,
+        fullName: profile.full_name, role: profile.role, location: profile.location,
+        active: profile.active !== false, mustChangePassword: !!profile.must_change_password,
+        lockedUntil: null, lastLogin: null
       }));
-    } catch (error) {
-      console.warn('Could not load Supabase profiles for the users page.', error);
-    }
+    } catch (error) { console.warn('Could not load Supabase profiles.', error); }
   }
 
   document.getElementById('users-body').innerHTML = users.map(u => {
-  const online = sessions.some(s => s.username === u.username);
-  const locked = u.lockedUntil && Date.now() < u.lockedUntil;
-  const status = !u.active
-    ? '<span class="badge badge-danger">Inactive</span>'
-    : locked
-    ? '<span class="badge badge-warning">Locked</span>'
-    : u.mustChangePassword
-    ? '<span class="badge badge-info">Temp PW</span>'
-    : online
-    ? '<span class="badge badge-success">● Online</span>'
-    : '<span class="badge badge-neutral">Offline</span>';
+    const online = sessions.some(s => s.username === u.username);
+    const locked = u.lockedUntil && Date.now() < u.lockedUntil;
+    const status = !u.active
+      ? '<span class="badge badge-danger">Inactive</span>'
+      : locked ? '<span class="badge badge-warning">Locked</span>'
+      : u.mustChangePassword ? '<span class="badge badge-info">Temp PW</span>'
+      : online ? '<span class="badge badge-success">● Online</span>'
+      : '<span class="badge badge-neutral">Offline</span>';
 
-  let actions = '';
-
-  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
-    if (u.role !== 'admin') {
-      actions =
-        '<button class="btn btn-secondary btn-sm" onclick="toggleSupabaseUserActive(\'' + u.id + '\', ' + u.active + ')">' +
-        (u.active ? 'Deactivate' : 'Activate') +
-        '</button>';
-    } else {
+    let actions = '';
+    if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+      if (u.role !== 'admin') {
+        actions = '<button class="btn btn-secondary btn-sm" onclick="toggleSupabaseUserActive(\''+u.id+'\', '+u.active+')">'+(u.active?'Deactivate':'Activate')+'</button>';
+      } else { actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>'; }
+    } else if (u.id === 'u_admin') {
       actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>';
+    } else {
+      actions = '<button class="btn btn-secondary btn-sm" onclick="resetUserPassword(\''+u.id+'\')">Reset PW</button>'+
+        '<button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\''+u.id+'\')">'+(u.active?'Deactivate':'Activate')+'</button>'+
+        (locked?'<button class="btn btn-secondary btn-sm" onclick="unlockUser(\''+u.id+'\')">Unlock</button>':'');
     }
-  } else if (u.id === 'u_admin') {
-    actions = '<span style="font-size:11px;color:var(--gray-400)">System admin</span>';
-  } else {
-    actions =
-      '<button class="btn btn-secondary btn-sm" onclick="resetUserPassword(\'' + u.id + '\')">Reset PW</button>' +
-      '<button class="btn btn-secondary btn-sm" onclick="toggleUserActive(\'' + u.id + '\')">' +
-      (u.active ? 'Deactivate' : 'Activate') +
-      '</button>' +
-      (locked ? '<button class="btn btn-secondary btn-sm" onclick="unlockUser(\'' + u.id + '\')">Unlock</button>' : '');
-  }
 
-  return '<tr>' +
-    '<td><div style="font-weight:500">' + escapeHtml(u.fullName) + '</div></td>' +
-    '<td><span class="mono">@' + escapeHtml(u.username) + '</span></td>' +
-    '<td><span class="badge ' + (u.role === 'admin' ? 'badge-neutral' : 'badge-info') + '">' + escapeHtml(u.role) + '</span></td>' +
-    '<td>' + escapeHtml(u.location) + '</td>' +
-    '<td>' + status + '</td>' +
-    '<td class="mono" style="color:var(--gray-400);font-size:12px">' + (u.lastLogin ? fmtDateTime(u.lastLogin) : 'Never') + '</td>' +
-    '<td style="display:flex;gap:6px;flex-wrap:wrap">' + actions + '</td>' +
-  '</tr>';
-}).join('');
+    return '<tr>'+
+      '<td><div style="font-weight:500">'+escapeHtml(u.fullName)+'</div></td>'+
+      '<td><span class="mono">@'+escapeHtml(u.username)+'</span></td>'+
+      '<td><span class="badge '+(u.role==='admin'?'badge-neutral':'badge-info')+'">'+escapeHtml(u.role)+'</span></td>'+
+      '<td>'+escapeHtml(u.location)+'</td>'+
+      '<td>'+status+'</td>'+
+      '<td class="mono" style="color:var(--gray-400);font-size:12px">'+(u.lastLogin?fmtDateTime(u.lastLogin):'Never')+'</td>'+
+      '<td style="display:flex;gap:6px;flex-wrap:wrap">'+actions+'</td>'+
+    '</tr>';
+  }).join('');
 }
+
 async function toggleSupabaseUserActive(userId, isActive){
   if(!requireAdmin('manage users')) return;
-
   const sb = window.LumodaSupabase.getClient();
-
-  const { error } = await sb
-    .from('profiles')
-    .update({ active: !isActive })
-    .eq('id', userId);
-
-  if (error) {
-    console.error(error);
-    toast('Could not update user status', 'error');
-    return;
-  }
-
+  const { error } = await sb.from('profiles').update({ active: !isActive }).eq('id', userId);
+  if (error) { console.error(error); toast('Could not update user status', 'error'); return; }
   toast(isActive ? 'User deactivated' : 'User activated');
   renderUsers();
 }
@@ -1391,9 +1933,7 @@ function openCreateUserModal(){
 
 function onNewUserRoleChange(){
   const role = document.getElementById('new-user-role').value;
-
-  document.getElementById('new-user-location-row').style.display =
-    (role === 'admin' || role === 'warehouse_manager') ? 'none' : 'flex';
+  document.getElementById('new-user-location-row').style.display = (role === 'admin' || role === 'warehouse_manager') ? 'none' : 'flex';
 }
 
 function saveNewUser(){
@@ -1401,10 +1941,7 @@ function saveNewUser(){
   const username=document.getElementById('new-user-username').value.trim().toLowerCase();
   const email=document.getElementById('new-user-email').value.trim().toLowerCase();
   const role=document.getElementById('new-user-role').value;
-  const location =
-  (role === 'admin' || role === 'warehouse_manager')
-    ? 'All'
-    : document.getElementById('new-user-location').value;
+  const location=(role==='admin'||role==='warehouse_manager')?'All':document.getElementById('new-user-location').value;
   const errEl=document.getElementById('create-user-error'); errEl.style.display='none';
   if(!fullName||!username||!email){errEl.textContent='Full name, username, and email are required.';errEl.style.display='block';return;}
   if(!/^[a-z0-9_]{3,20}$/.test(username)){errEl.textContent='Username: 3–20 chars, letters/numbers/underscore only.';errEl.style.display='block';return;}
@@ -1415,24 +1952,9 @@ function saveNewUser(){
       const actionButton = document.querySelector('#create-user-modal .btn.btn-primary');
       if (actionButton) { actionButton.disabled = true; actionButton.textContent = 'Creating...'; }
       try {
-        console.log('Creating user payload:', {
-  email,
-  username,
-  fullName,
-  role,
-  location
-});
-
-const result = await window.LumodaSupabase.createStaffAccount({
-  email,
-  username,
-  fullName,
-  role,
-  location
-});
+        const result = await window.LumodaSupabase.createStaffAccount({ email, username, fullName, role, location });
         addAudit('User Created', currentUser.fullName+' created Supabase account for "'+fullName+'" (@'+username+') ['+location+']');
-        closeModal('create-user-modal');
-        renderUsers();
+        closeModal('create-user-modal'); renderUsers();
         showTempPasswordModal(fullName, username, result.tempPassword, location);
         const emailEl = document.getElementById('temp-email-display');
         if (emailEl) emailEl.textContent = result.profile?.email || email;
@@ -1445,6 +1967,7 @@ const result = await window.LumodaSupabase.createStaffAccount({
     })();
     return;
   }
+
   const users=getUsers();
   if(users.find(u=>u.username===username)){errEl.textContent='Username already taken.';errEl.style.display='block';return;}
   const tempPw='LM'+Math.random().toString(36).substring(2,8).toUpperCase();
@@ -1474,17 +1997,9 @@ function showTempPasswordModal(fullName,username,tempPw,location){
 }
 
 function copyTempPw() {
-  if (!_lastTempPw) {
-    toast('No temporary password to copy', 'error');
-    return;
-  }
-
-  try {
-    navigator.clipboard.writeText(_lastTempPw);
-    toast('Temporary password copied');
-  } catch (e) {
-    toast('Could not copy password', 'error');
-  }
+  if (!_lastTempPw) { toast('No temporary password to copy', 'error'); return; }
+  try { navigator.clipboard.writeText(_lastTempPw); toast('Temporary password copied'); }
+  catch (e) { toast('Could not copy password', 'error'); }
 }
 
 function resetUserPassword(userId){
@@ -1534,10 +2049,7 @@ function saveMyPassword(){
         if (updateError) throw updateError;
         addAudit('Password Changed', currentUser.fullName+' changed their password');
         closeModal('my-password-modal'); toast('Password updated');
-      } catch (error) {
-        err.textContent = error.message || 'Could not update your password.';
-        err.style.display = 'block';
-      }
+      } catch (error) { err.textContent = error.message || 'Could not update your password.'; err.style.display = 'block'; }
     })();
     return;
   }
@@ -1547,10 +2059,35 @@ function saveMyPassword(){
   addAudit('Password Changed',currentUser.fullName+' changed their password');
   closeModal('my-password-modal'); toast('Password updated');
 }
+
 // ============================================================
 // AUDIT LOG
 // ============================================================
-function renderAuditLog(){if(!isAdmin())return;const log=LS.get('lumoda_audit')||[];document.getElementById('audit-list').innerHTML=log.length?log.map(a=>'<div class="audit-item"><div class="audit-dot"></div><div><div style="font-size:13px"><strong>'+escapeHtml(a.action)+'</strong> — '+escapeHtml(a.detail)+'</div><div class="audit-meta">'+escapeHtml(a.byName||a.by)+' · '+fmtDateTime(a.createdAt)+'</div></div></div>').join(''):'<div style="padding:40px;text-align:center;color:var(--gray-400)">No audit logs yet</div>';}
+async function renderAuditLog() {
+  if (!isAdmin()) return;
+
+  // FIX BUG 3: Load from Supabase first, fall back to localStorage
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try {
+      const serverLogs = await window.LumodaSupabase.loadAuditLogs();
+      if (Array.isArray(serverLogs) && serverLogs.length > 0) {
+        LS.set('lumoda_audit', serverLogs);
+      }
+    } catch (e) {
+      console.warn('Could not load audit logs from server:', e);
+    }
+  }
+
+  const log = LS.get('lumoda_audit') || [];
+  document.getElementById('audit-list').innerHTML = log.length
+    ? log.map(a =>
+        '<div class="audit-item"><div class="audit-dot"></div><div>' +
+        '<div style="font-size:13px"><strong>' + escapeHtml(a.action) + '</strong> — ' + escapeHtml(a.detail) + '</div>' +
+        '<div class="audit-meta">' + escapeHtml(a.byName || a.by || 'system') + ' · ' + fmtDateTime(a.createdAt) + '</div>' +
+        '</div></div>'
+      ).join('')
+    : '<div style="padding:40px;text-align:center;color:var(--gray-400)">No audit logs yet</div>';
+}
 function filterAudit(val){const q=val.toLowerCase();document.querySelectorAll('#audit-list .audit-item').forEach(el=>el.style.display=el.textContent.toLowerCase().includes(q)?'':'none');}
 
 // ============================================================
@@ -1569,7 +2106,7 @@ function parseCsvLine(line){const out=[];let cur='',inQ=false;for(let i=0;i<line
 function parseCsvFile(input){const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const text=String(reader.result||'');const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)throw new Error('CSV must include headers and at least one product row.');const headers=parseCsvLine(lines[0]).map(h=>h.toLowerCase().replace(/\s+/g,''));const idx={name:headers.indexOf('name'),price:headers.indexOf('price'),sku:headers.indexOf('sku'),category:headers.indexOf('category'),alabar:headers.indexOf('alabarstock'),morocco:headers.indexOf('moroccostock'),reorder:headers.indexOf('reorderlevel')};if(idx.name<0||idx.price<0)throw new Error('Missing required columns: Name and Price.');csvRows=lines.slice(1).map((line,i)=>{const c=parseCsvLine(line);return{name:c[idx.name]||'',price:parseFloat(c[idx.price]||'0'),sku:idx.sku>=0?c[idx.sku]:'',category:idx.category>=0?c[idx.category]:'General',stockAlabar:idx.alabar>=0?parseInt(c[idx.alabar]||'0'):0,stockMorocco:idx.morocco>=0?parseInt(c[idx.morocco]||'0'):0,reorder:idx.reorder>=0?parseInt(c[idx.reorder]||'5'):5,row:i+2};}).filter(r=>r.name);renderCsvPreview();}catch(err){showCsvError(err.message);}};reader.readAsText(file);}
 function renderCsvPreview(){document.getElementById('csv-preview').style.display='block';document.getElementById('csv-import-btn').style.display=csvRows.length?'inline-flex':'none';document.getElementById('csv-preview-title').textContent=csvRows.length+' product(s) ready to import';document.getElementById('csv-preview-body').innerHTML=csvRows.map((r,i)=>'<tr><td>'+escapeHtml(r.name)+'</td><td>'+escapeHtml(r.sku||'—')+'</td><td>'+escapeHtml(r.category||'General')+'</td><td class="mono">'+fmtGHS(r.price||0)+'</td><td class="mono">'+(r.stockAlabar||0)+'</td><td class="mono">'+(r.stockMorocco||0)+'</td><td class="mono">'+(r.reorder||5)+'</td><td><button class="btn btn-danger btn-sm" onclick="removeCsvRow('+i+')">Remove</button></td></tr>').join('');}
 function removeCsvRow(i){csvRows.splice(i,1);renderCsvPreview();}
-async function importCsvProducts(){if(!requireAdmin('import products'))return;if(!csvRows.length)return;if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {try {const res = await window.LumodaSupabase.importProducts(csvRows.map(r => ({name: r.name, sku: r.sku, category: r.category || 'General', price: r.price || 0, stock_alabar: r.stockAlabar || 0, stock_morocco: r.stockMorocco || 0, reorder_level: r.reorder || 5})));if (res.error) throw res.error;await syncSupabaseCache();addAudit('CSV Imported', currentUser.fullName+' imported '+csvRows.length+' products [server]');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();return;} catch (err) {showCsvError(err.message || 'Could not import products to Supabase.');return;}}showCsvError('Supabase is not configured. CSV imports are disabled until supabase-config.js loads correctly.');}
+async function importCsvProducts(){if(!requireAdmin('import products'))return;if(!csvRows.length)return;if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()){try{const res=await window.LumodaSupabase.importProducts(csvRows.map(r=>({name:r.name,sku:r.sku,category:r.category||'General',price:r.price||0,stock_alabar:r.stockAlabar||0,stock_morocco:r.stockMorocco||0,reorder_level:r.reorder||5})));if(res.error)throw res.error;await syncSupabaseCache();addAudit('CSV Imported',currentUser.fullName+' imported '+csvRows.length+' products [server]');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();return;}catch(err){showCsvError(err.message||'Could not import products to Supabase.');return;}}showCsvError('Supabase is not configured. CSV imports are disabled.');}
 function downloadCsvTemplate(){const csv='Name,Price,SKU,Category,AlabarStock,MoroccoStock,ReorderLevel\nExample Product,100,EX-001,General,10,5,3';const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-products-template.csv';a.click();URL.revokeObjectURL(a.href);}
 function exportCSV(){const h=getStockHistory();const csv='Date,Type,Product,Location,Change,Note,By\n'+h.map(x=>[fmtDateTime(x.createdAt),x.type,x.productName,x.location,x.change,x.note,x.byName||x.by].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-stock-history.csv';a.click();URL.revokeObjectURL(a.href);}
 
@@ -1582,20 +2119,15 @@ function closeSidebar() { document.getElementById('sidebar').classList.remove('o
 // ============================================================
 // OFFLINE
 // ============================================================
-window.addEventListener('offline',()=>document.getElementById('offline-badge').style.display='block');
-window.addEventListener('online', ()=>document.getElementById('offline-badge').style.display='none');
-if (!navigator.onLine) document.getElementById('offline-badge').style.display = 'block';
+window.addEventListener('offline',()=>{ const el=document.getElementById('offline-badge'); if(el) el.style.display='block'; });
+window.addEventListener('online', ()=>{ const el=document.getElementById('offline-badge'); if(el) el.style.display='none'; });
+if (!navigator.onLine) { const el=document.getElementById('offline-badge'); if(el) el.style.display='block'; }
 
 // ============================================================
 // GLOBAL SEARCH
 // ============================================================
 function globalSearch(val){ if(val&&/^\d{4,}$/.test(val)){navigate('invoices',null);filterInvoices(val);} }
 document.getElementById('global-search')?.addEventListener('input', e => globalSearch(e.target.value.trim()));
-
-// ============================================================
-// INIT
-// ============================================================
-initData();
 
 // ============================================================
 // PRINT INVOICE
@@ -1606,10 +2138,7 @@ function printInvoice() {
 
   const pmLine = inv.payMethod
     ? '<div style="margin-top:6px;font-size:12px"><strong>Payment:</strong> ' +
-      (inv.payMethod === 'momo'
-        ? 'Mobile Money' + (inv.momoNumber ? ' — ' + escapeHtml(inv.momoNumber) : '')
-        : 'Cash') +
-      '</div>'
+      (inv.payMethod === 'momo' ? 'Mobile Money' + (inv.momoNumber ? ' — ' + escapeHtml(inv.momoNumber) : '') : 'Cash') + '</div>'
     : '';
 
   const noteLine = inv.notes
@@ -1617,75 +2146,41 @@ function printInvoice() {
     : '';
 
   const blanks = Array(Math.max(0, 8 - inv.items.length))
-    .fill(`
-      <tr>
-        <td style="padding:8px 6px;border-bottom:1px solid #eee">&nbsp;</td>
-        <td style="border-bottom:1px solid #eee"></td>
-        <td style="border-bottom:1px solid #eee"></td>
-        <td style="border-bottom:1px solid #eee"></td>
-      </tr>
-    `).join('');
+    .fill(`<tr><td style="padding:8px 6px;border-bottom:1px solid #eee">&nbsp;</td><td style="border-bottom:1px solid #eee"></td><td style="border-bottom:1px solid #eee"></td><td style="border-bottom:1px solid #eee"></td></tr>`)
+    .join('');
 
   const rows = inv.items.map(item => `
     <tr>
-      <td style="text-align:center;padding:8px 6px;border-bottom:1px solid #eee">
-        ${item.qty}
-      </td>
-
-      <td style="padding:8px 6px;border-bottom:1px solid #eee">
-        ${escapeHtml(item.name)}
-      </td>
-
-      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace">
-        ${Number(item.price || 0).toFixed(2)}
-      </td>
-
-      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace;font-weight:700">
-        ${Number(item.total || 0).toFixed(2)}
-      </td>
+      <td style="text-align:center;padding:8px 6px;border-bottom:1px solid #eee">${item.qty}</td>
+      <td style="padding:8px 6px;border-bottom:1px solid #eee">${escapeHtml(item.name)}${item.priceType ? ' <em style="color:#888;font-size:11px">('+priceTypeLabel(item.priceType)+')</em>' : ''}</td>
+      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace">${Number(item.price || 0).toFixed(2)}</td>
+      <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace;font-weight:700">${Number(item.total || 0).toFixed(2)}</td>
     </tr>
   `).join('');
 
   const html = `
     <div style="font-family:'DM Sans',Arial,sans-serif;font-size:12px;color:#000;max-width:620px;margin:0 auto">
-
       <table width="100%" cellpadding="0" cellspacing="0" style="background:#5C2D0A;color:white;padding:12px 16px">
         <tr>
           <td>
-            <div style="font-size:20px;font-weight:800;letter-spacing:1px">
-              LUMODA ENTERPRISE
-            </div>
-            <div style="font-style:italic;font-size:12px;opacity:.9">
-              The cook's helper
-            </div>
-            <div style="font-size:10px;opacity:.75">
-              Dealers in All Kinds of Kitchen Accessories
-            </div>
-            <div style="font-size:10px;opacity:.85;margin-top:3px">
-  Tel: 0244369357 / 0546014044 / 0243563481
-</div>
+            <div style="font-size:20px;font-weight:800;letter-spacing:1px">LUMODA ENTERPRISE</div>
+            <div style="font-style:italic;font-size:12px;opacity:.9">The cook's helper</div>
+            <div style="font-size:10px;opacity:.75">Dealers in All Kinds of Kitchen Accessories</div>
+            <div style="font-size:10px;opacity:.85;margin-top:3px">Tel: 0244369357 / 0546014044 / 0243563481</div>
           </td>
-
           <td align="right">
-            <div style="border:1px solid rgba(255,255,255,.45);padding:4px 10px;font-size:11px;font-weight:700">
-              MAA LUCY'S PLACE
-            </div>
+            <div style="border:1px solid rgba(255,255,255,.45);padding:4px 10px;font-size:11px;font-weight:700">MAA LUCY'S PLACE</div>
           </td>
         </tr>
       </table>
-
       <div style="background:#C8291C;color:white;padding:8px 14px;display:flex;justify-content:space-between;font-weight:700;letter-spacing:.08em">
-        <span>INVOICE</span>
-        <span>No: ${escapeHtml(inv.number)}</span>
-        <span>${fmtDate(inv.createdAt)}</span>
+        <span>INVOICE</span><span>No: ${escapeHtml(inv.number)}</span><span>${fmtDate(inv.createdAt)}</span>
       </div>
-
       <div style="padding:12px 14px;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
         <div><strong>Customer:</strong> ${escapeHtml(inv.customerName)}</div>
-        ${inv.customerPhone ? '<div><strong>Tel:</strong> ' + escapeHtml(inv.customerPhone) + '</div>' : ''}
-        ${inv.customerAddress ? '<div><strong>Address:</strong> ' + escapeHtml(inv.customerAddress) + '</div>' : ''}
+        ${inv.customerPhone ? '<div><strong>Tel:</strong> '+escapeHtml(inv.customerPhone)+'</div>' : ''}
+        ${inv.customerAddress ? '<div><strong>Address:</strong> '+escapeHtml(inv.customerAddress)+'</div>' : ''}
       </div>
-
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;border-left:2px solid #5C2D0A;border-right:2px solid #5C2D0A">
         <thead>
           <tr style="background:#C8291C;color:white">
@@ -1695,32 +2190,19 @@ function printInvoice() {
             <th style="padding:8px 6px;text-align:right">AMOUNT</th>
           </tr>
         </thead>
-
-        <tbody>
-          ${rows}
-          ${blanks}
-        </tbody>
+        <tbody>${rows}${blanks}</tbody>
       </table>
-
       <div style="border:2px solid #5C2D0A;border-top:0;padding:12px 14px">
-        <div style="text-align:right;font-size:16px;font-weight:800">
-          Total: ${fmtGHS(inv.total)}
-        </div>
-
+        <div style="text-align:right;font-size:13px;color:#555">Subtotal: ${fmtGHS(inv.subtotal || inv.total)}</div>
+        <div style="text-align:right;font-size:13px;color:#555">Discount: -${fmtGHS(inv.discount || 0)}</div>
+        <div style="text-align:right;font-size:16px;font-weight:800">Total: ${fmtGHS(inv.total)}</div>
         <div style="margin-top:8px;font-size:11px;color:#555">
           <strong>Status:</strong> ${escapeHtml(inv.status.toUpperCase())}
-          ${pmLine}
-          ${noteLine}
+          ${pmLine}${noteLine}
         </div>
       </div>
-
-      <div style="margin-top:10px;font-size:11px;color:#555">
-  Prepared By: ${escapeHtml(inv.createdByName || 'System')}
-</div>
-
-      <div style="margin-top:16px;text-align:center;font-size:10px;color:#666">
-        Goods sold out are not returnable
-      </div>
+      <div style="margin-top:10px;font-size:11px;color:#555">Prepared By: ${escapeHtml(inv.createdByName || 'System')}</div>
+      <div style="margin-top:16px;text-align:center;font-size:10px;color:#666">Goods sold out are not returnable</div>
     </div>
   `;
 
@@ -1728,17 +2210,71 @@ function printInvoice() {
   printArea.innerHTML = html;
   window.print();
 }
+
 // ============================================================
-// INITIAL SESSION RESTORE
+// INIT
 // ============================================================
-(async function restoreSession(){
-  try{
-    if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&autoLoginAllowed()){
-      const sb=window.LumodaSupabase.getClient();
-      const {data}=await sb.auth.getUser();
-      const user=data?.user;
-      if(user){const {data:profile}=await window.LumodaSupabase.getProfile(user.id);if(profile&&profile.active!==false){currentUser=supabaseProfileToLocal(profile);currentLocation=currentUser.location;currentUser.token=registerSession(currentUser);await syncSupabaseCache();showApp();return;}}
+initData();
+
+// ============================================================
+// FIX #4: SINGLE SESSION RESTORE (duplicate removed)
+// Only the safe version remains — no race condition
+// ============================================================
+(async function restoreSession() {
+  try {
+    const sbEnabled =
+      window.LumodaSupabase &&
+      typeof window.LumodaSupabase.isConfigured === 'function' &&
+      window.LumodaSupabase.isConfigured();
+
+    const canAutoLogin = typeof autoLoginAllowed === 'function' ? autoLoginAllowed() : false;
+
+    if (sbEnabled && canAutoLogin) {
+      const sb = window.LumodaSupabase.getClient?.();
+      if (!sb) throw new Error('Supabase client missing');
+
+      const { data } = await sb.auth.getUser();
+      const user = data?.user;
+
+      if (user && window.LumodaSupabase.getProfile) {
+        const { data: profile } = await window.LumodaSupabase.getProfile(user.id);
+        if (profile && profile.active !== false) {
+          currentUser = supabaseProfileToLocal(profile);
+          currentLocation = currentUser.location || 'All';
+          currentUser.token = registerSession(currentUser);
+          await syncSupabaseCache();
+          showApp();
+          return;
+        }
+      }
     }
-  }catch(e){console.warn('Session restore failed',e);} 
+  } catch (e) {
+    console.warn('Session restore failed:', e);
+  }
   showAuthScreen();
 })();
+
+// ============================================================
+// SERVICE WORKER (PWA)
+// ============================================================
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js')
+      .then(() => console.log('PWA: Service Worker registered'))
+      .catch(err => console.log('PWA error:', err));
+  });
+}
+
+// ============================================================
+// GLOBAL EXPORTS (for HTML onclick attributes)
+// ============================================================
+window.openEditInvoiceModal = openEditInvoiceModal;
+window.saveEditedInvoice    = saveEditedInvoice;
+window.updateInvoice        = updateInvoice;
+window.addItem              = addItem;
+window.shareInvoice         = shareInvoice;
+window._copyAndCloseShare   = _copyAndCloseShare;
+window._sendViaSMS          = _sendViaSMS;
+window._selectMpdMethod     = _selectMpdMethod;
+window._confirmMarkPaid     = _confirmMarkPaid;
+window._shareViaWhatsAppOrCopy = _shareViaWhatsAppOrCopy;
