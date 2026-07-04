@@ -596,24 +596,30 @@ function escapeHtml(v){
 function escAttr(v) { return escapeHtml(v); }
 
 function normalizeProduct(p) {
-  const retail = Number(p.price ?? p.retailPrice ?? p.retail_price ?? 0);
-  const wholesale = Number(p.wholesalePrice ?? p.wholesale_price ?? retail);
-  const carton = Number(p.cartonPrice ?? p.carton_price ?? (wholesale || retail));
+  // FIX: Each price is fully independent — never copy one into another.
+  // Read from all possible field names (camelCase from JS, snake_case from Supabase).
+  // Only fall back to 0 if genuinely absent — never fall back to retail.
+  const retail    = Number(p.retailPrice    ?? p.retail_price    ?? p.price ?? 0);
+  const wholesale = Number(p.wholesalePrice ?? p.wholesale_price ?? 0);
+  const carton    = Number(p.cartonPrice    ?? p.carton_price    ?? 0);
+
   return {
     ...p,
-    price: retail,
-    retailPrice: retail,
+    price:          retail,
+    retailPrice:    retail,
     wholesalePrice: wholesale,
-    cartonPrice: carton
+    cartonPrice:    carton
   };
 }
 function normalizeProducts(products) { return (products || []).map(normalizeProduct); }
 
 function productPriceForType(product, priceType) {
+  // FIX: Return the exact stored price — no fallback to retail.
+  // If a price is 0, show 0 so staff know it needs to be set.
   const p = normalizeProduct(product || {});
-  if (priceType === 'wholesale') return Number(p.wholesalePrice || p.price || 0);
-  if (priceType === 'carton') return Number(p.cartonPrice || p.wholesalePrice || p.price || 0);
-  return Number(p.price || 0);
+  if (priceType === 'wholesale') return Number(p.wholesalePrice ?? 0);
+  if (priceType === 'carton')    return Number(p.cartonPrice    ?? 0);
+  return Number(p.retailPrice ?? p.price ?? 0);
 }
 function priceTypeLabel(priceType) {
   return priceType === 'wholesale' ? 'Wholesale' : priceType === 'carton' ? 'Carton' : 'Retail';
@@ -663,6 +669,38 @@ function refreshAllLineItemDataLists() {
   // Also refresh the global product-list datalist if it exists
   const globalList = document.getElementById('product-list');
   if (globalList) globalList.innerHTML = opts;
+}
+
+// ============================================================
+// CUSTOMER TYPE SELECTOR — sets price type for ALL line items
+// ============================================================
+function selectCustomerType(type) {
+  window._invoicePriceType = type;
+  _updateCustomerTypePills(type);
+  // Update ALL existing line item prices immediately
+  document.querySelectorAll('#line-items-body .line-item-row').forEach(row => {
+    const inputs = row.querySelectorAll('input');
+    const name   = inputs[0].value.trim();
+    const pi     = inputs[2];
+    const product = getProducts().find(p => p.name.toLowerCase() === name.toLowerCase());
+    if (product) {
+      pi.removeAttribute('readonly');
+      pi.value = Number(productPriceForType(product, type)).toFixed(2);
+      pi.setAttribute('readonly', '');
+    }
+  });
+  calcTotal();
+}
+
+function _updateCustomerTypePills(type) {
+  const on  = 'flex:1;padding:9px;border:2px solid var(--brand-brown);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--brand-brown)';
+  const off = 'flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)';
+  const rEl = document.getElementById('ctype-retail');
+  const wEl = document.getElementById('ctype-wholesale');
+  const cEl = document.getElementById('ctype-carton');
+  if (rEl) rEl.style.cssText = type === 'retail'    ? on : off;
+  if (wEl) wEl.style.cssText = type === 'wholesale' ? on : off;
+  if (cEl) cEl.style.cssText = type === 'carton'    ? on : off;
 }
 
 // ============================================================
@@ -773,6 +811,9 @@ function openInvoiceModal() {
   ['inv-cust-name','inv-cust-phone','inv-cust-addr','inv-notes','inv-momo-number'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   document.getElementById('inv-status').value = 'pending';
   document.getElementById('invoice-total-display').textContent = 'Total: GH₵ 0.00';
+  // Reset customer type to wholesale (default since all prices are wholesale)
+  window._invoicePriceType = 'wholesale';
+  _updateCustomerTypePills('wholesale');
   const _pmRow   = document.getElementById('payment-method-row');
   const _momoRow = document.getElementById('momo-number-row');
   const _pmCash  = document.getElementById('pm-cash');
@@ -792,10 +833,15 @@ function onStatusChange() {
   const status  = document.getElementById('inv-status').value;
   const pmRow   = document.getElementById('payment-method-row');
   const momoRow = document.getElementById('momo-number-row');
-  if (pmRow)   pmRow.style.display = (status==='paid') ? 'block' : 'none';
-  if (status !== 'paid') {
+  const showPm  = (status === 'paid' || status === 'partial');
+  if (pmRow) pmRow.style.display = showPm ? 'block' : 'none';
+  if (!showPm) {
     window._selectedPayMethod = '';
     if (momoRow) momoRow.style.display = 'none';
+    const cb = document.getElementById('momo-same-as-mine');
+    const input = document.getElementById('inv-momo-number');
+    if (cb) cb.checked = false;
+    if (input) { input.value = ''; input.disabled = false; input.style.opacity = '1'; }
   }
 }
 
@@ -806,21 +852,44 @@ function selectPayMethod(method) {
   document.getElementById('pm-cash').style.cssText = method==='cash' ? on : off;
   document.getElementById('pm-momo').style.cssText = method==='momo' ? on : off;
   document.getElementById('momo-number-row').style.display = method==='momo' ? 'block' : 'none';
+  if (method !== 'momo') {
+    const cb = document.getElementById('momo-same-as-mine');
+    const input = document.getElementById('inv-momo-number');
+    if (cb) cb.checked = false;
+    if (input) { input.value = ''; input.disabled = false; input.style.opacity = '1'; }
+  }
 }
 
-// FIX #5: quantity starts empty — user types it themselves
+function toggleMomoSameAsMe(checkbox) {
+  const input = document.getElementById('inv-momo-number');
+  if (checkbox.checked) {
+    const customerPhone = document.getElementById('inv-cust-phone')?.value?.trim() || '';
+    if (!customerPhone) {
+      alert('Please enter the customer\'s phone number first.');
+      checkbox.checked = false;
+      return;
+    }
+    input.value = customerPhone;
+    input.disabled = true;
+    input.style.opacity = '0.6';
+  } else {
+    input.value = '';
+    input.disabled = false;
+    input.style.opacity = '1';
+  }
+}
+
+// FIX: quantity starts empty, no per-item type dropdown (global type selector used)
 function addLineItem() {
   const id   = lineItemCount++;
   const opts = getProducts().map(p=>'<option value="'+escAttr(p.name)+'">'+escapeHtml(p.name)+'</option>').join('');
   const row  = document.createElement('div');
   row.className = 'line-item-row'; row.id = 'li-'+id;
-  // qty has no value="" and placeholder="Qty" — user must type it
   row.innerHTML =
     '<input type="text" list="pl-'+id+'" placeholder="Product name" oninput="onLineItemInput('+id+')" onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
     '<datalist id="pl-'+id+'">'+opts+'</datalist>'+
-    '<select onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none"><option value="retail">Retail</option><option value="wholesale">Wholesale</option><option value="carton">Carton</option></select>'+
     '<input type="number" placeholder="Qty" min="1" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
-    '<input type="number" placeholder="0.00" min="0" step="0.01" readonly title="Price is set automatically based on product and type" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">'+
+    '<input type="number" placeholder="0.00" min="0" step="0.01" readonly title="Price set by customer type" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">'+
     '<button class="remove-item" onclick="removeLineItem('+id+')">×</button>';
   document.getElementById('line-items-body').appendChild(row);
 }
@@ -828,10 +897,11 @@ function addLineItem() {
 function onLineItemInput(id) {
   const row = document.getElementById('li-'+id);
   if (!row) return;
-  const ni        = row.querySelector('input[type=text]');
-  const priceType = row.querySelector('select')?.value || 'retail';
   const inputs    = row.querySelectorAll('input');
-  const pi        = inputs[2]; // price field (text=0, qty=1, price=2)
+  const ni        = inputs[0];
+  // FIX: price index is now 1=qty, 2=price (no select dropdown in row)
+  const pi        = inputs[2];
+  const priceType = window._invoicePriceType || 'wholesale';
   const m         = getProducts().find(p => p.name.toLowerCase() === ni.value.toLowerCase());
   if (m) {
     const newPrice = productPriceForType(m, priceType);
@@ -840,10 +910,7 @@ function onLineItemInput(id) {
     pi.setAttribute('readonly', '');
     pi.style.borderColor = '#16a34a';
     pi.style.color = '#166534';
-    setTimeout(() => {
-      pi.style.borderColor = '';
-      pi.style.color = 'var(--gray-400)';
-    }, 1000);
+    setTimeout(() => { pi.style.borderColor = ''; pi.style.color = 'var(--gray-400)'; }, 1000);
   }
   calcTotal();
 }
@@ -893,14 +960,14 @@ async function createInvoice() {
 
   const items = [];
   let valid = true;
+  const globalPriceType = window._invoicePriceType || 'wholesale';
   rows.forEach(row => {
     const inp = row.querySelectorAll('input');
     const pn  = inp[0].value.trim();
-    const priceType = row.querySelector('select')?.value || 'retail';
     const qty   = parseInt(inp[1].value) || 0;
     const price = parseFloat(inp[2].value) || 0;
     if (!pn || qty < 1 || price <= 0) { valid = false; return; }
-    items.push({ name: pn, priceType, qty, price, total: qty * price });
+    items.push({ name: pn, priceType: globalPriceType, qty, price, total: qty * price });
   });
 
   if (!valid) { invoiceSaving = false; toast('Fill in all item fields (name, qty, price)', 'error'); return; }
@@ -1067,7 +1134,7 @@ function buildInvoiceHTML(inv) {
         inv.items.map(item =>
           '<tr>' +
             '<td style="text-align:center;padding:9px 10px;font-weight:500">'+escapeHtml(item.qty)+'</td>' +
-            '<td style="padding:9px 10px">'+escapeHtml(item.name)+(item.priceType ? ' <span style="color:var(--gray-400);font-size:11px">('+priceTypeLabel(item.priceType)+')</span>' : '')+'</td>' +
+            '<td style="padding:9px 10px">'+escapeHtml(item.name)+'</td>' +
             '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono)">'+Number(item.price || 0).toFixed(2)+'</td>' +
             '<td style="text-align:right;padding:9px 10px;font-family:var(--font-mono);font-weight:600">'+Number(item.total || 0).toFixed(2)+'</td>' +
           '</tr>'
@@ -1328,7 +1395,7 @@ function generateInvoiceText(inv) {
   const sep = '─'.repeat(58);
   const rows = inv.items.map(item => {
     const qty    = String(item.qty || '').padEnd(5);
-    const label  = item.priceType ? `${item.name} (${priceTypeLabel(item.priceType)})` : item.name;
+    const label  = item.name;
     const name   = String(label || '').substring(0, 28).padEnd(28);
     const unit   = Number(item.price || 0).toFixed(2).padStart(10);
     const amount = Number(item.total || 0).toFixed(2).padStart(11);
@@ -1697,7 +1764,7 @@ function renderProducts() {
     const sA=p.stockAlabar,sM=p.stockMorocco,comb=effLoc==='Morocco'?sM:effLoc==='Alabar'?sA:Math.min(sA,sM);
     const adjBtn=isAdmin()?'<button class="btn btn-secondary btn-sm" onclick="openStockAdjust(\''+p.id+'\')">Adjust</button>':'';
     const editBtn=isAdmin()?'<button class="btn btn-secondary btn-sm" onclick="editProduct(\''+p.id+'\')">Edit</button>':'';
-    const priceHtml = '<div class="mono">'+fmtGHS(p.price)+'</div><div style="font-size:11px;color:var(--gray-400)">W: '+fmtGHS(p.wholesalePrice)+' · C: '+fmtGHS(p.cartonPrice)+'</div>';
+    const priceHtml = '<div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono);margin-bottom:1px">R: '+fmtGHS(p.retailPrice||p.price)+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono);margin-bottom:1px">W: '+fmtGHS(p.wholesalePrice)+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">C: '+fmtGHS(p.cartonPrice)+'</div>';
     return '<tr><td style="font-weight:500">'+escapeHtml(p.name)+'</td><td class="mono">'+escapeHtml(p.sku)+'</td><td style="color:var(--gray-400)">'+escapeHtml(p.category)+'</td><td>'+priceHtml+'</td><td class="mono" style="text-align:center;color:'+(sA<=p.reorder?'#dc2626':'inherit')+'">'+sA+'</td><td class="mono" style="text-align:center;color:'+(sM<=p.reorder?'#dc2626':'inherit')+'">'+sM+'</td><td>'+stockBadge(comb,p.reorder)+'</td><td class="mono" style="color:var(--gray-400)">'+p.reorder+'</td><td style="display:flex;gap:6px">'+adjBtn+editBtn+'</td></tr>';
   }).join('');
 }
@@ -1718,12 +1785,22 @@ async function saveProduct(){
   const reorder=parseInt(document.getElementById('prod-reorder').value)||5;
   const sku=document.getElementById('prod-sku').value.trim()||'SKU-'+Date.now();
   const cat=document.getElementById('prod-category').value.trim()||'General';
+  // FIX: if wholesale/carton fields are left blank when editing,
+  // keep the existing stored value — don't overwrite with retail price
+  const existingProduct = editingProductId ? getProducts().find(p => p.id === editingProductId) : null;
+  const resolvedWholesale = isNaN(wholesalePrice)
+    ? (existingProduct ? existingProduct.wholesalePrice : price)
+    : wholesalePrice;
+  const resolvedCarton = isNaN(cartonPrice)
+    ? (existingProduct ? existingProduct.cartonPrice : resolvedWholesale)
+    : cartonPrice;
+
   const payload={
     id:editingProductId,
     name,sku,category:cat,
     price,retailPrice:price,
-    wholesalePrice:isNaN(wholesalePrice)?price:wholesalePrice,
-    cartonPrice:isNaN(cartonPrice)?(isNaN(wholesalePrice)?price:wholesalePrice):cartonPrice,
+    wholesalePrice: resolvedWholesale,
+    cartonPrice:    resolvedCarton,
     stockAlabar:sA,stockMorocco:sM,reorder
   };
 
@@ -2152,7 +2229,7 @@ function printInvoice() {
   const rows = inv.items.map(item => `
     <tr>
       <td style="text-align:center;padding:8px 6px;border-bottom:1px solid #eee">${item.qty}</td>
-      <td style="padding:8px 6px;border-bottom:1px solid #eee">${escapeHtml(item.name)}${item.priceType ? ' <em style="color:#888;font-size:11px">('+priceTypeLabel(item.priceType)+')</em>' : ''}</td>
+      <td style="padding:8px 6px;border-bottom:1px solid #eee">${escapeHtml(item.name)}</td>
       <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace">${Number(item.price || 0).toFixed(2)}</td>
       <td style="text-align:right;padding:8px 6px;border-bottom:1px solid #eee;font-family:monospace;font-weight:700">${Number(item.total || 0).toFixed(2)}</td>
     </tr>
@@ -2227,12 +2304,14 @@ initData();
       typeof window.LumodaSupabase.isConfigured === 'function' &&
       window.LumodaSupabase.isConfigured();
 
-    const canAutoLogin = typeof autoLoginAllowed === 'function' ? autoLoginAllowed() : false;
-
-    if (sbEnabled && canAutoLogin) {
+    if (sbEnabled) {
       const sb = window.LumodaSupabase.getClient?.();
       if (!sb) throw new Error('Supabase client missing');
 
+      // FIX: Always try to restore from Supabase active session on refresh.
+      // Supabase persists the session in localStorage automatically.
+      // The "remember me" checkbox only controls our own auto-login flag —
+      // but the Supabase token is always available after login until signOut.
       const { data } = await sb.auth.getUser();
       const user = data?.user;
 

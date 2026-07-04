@@ -67,23 +67,26 @@
   }
 
   function toLocalProduct(row) {
-    const retail    = Number(row.retail_price    || row.price || 0);
-    const wholesale = Number(row.wholesale_price || retail);
-    const carton    = Number(row.carton_price    || wholesale || retail);
-    return {
-      id:            row.id,
-      name:          row.name,
-      sku:           row.sku           || '',
-      category:      row.category      || 'General',
-      price:         retail,
-      retailPrice:   retail,
-      wholesalePrice: wholesale,
-      cartonPrice:   carton,
-      stockAlabar:   Number(row.stock_alabar  || 0),
-      stockMorocco:  Number(row.stock_morocco || 0),
-      reorder:       Number(row.reorder_level || 0)
-    };
-  }
+  const retail = Number(row.retail_price ?? row.price ?? 0);
+  const wholesale = Number(row.wholesale_price ?? 0);
+  const carton = Number(row.carton_price ?? 0);
+
+  return {
+    id: row.id,
+    name: row.name,
+    sku: row.sku || '',
+    category: row.category || 'General',
+
+    price: retail,
+    retailPrice: retail,
+    wholesalePrice: wholesale,
+    cartonPrice: carton,
+
+    stockAlabar: Number(row.stock_alabar || 0),
+    stockMorocco: Number(row.stock_morocco || 0),
+    reorder: Number(row.reorder_level || 0)
+  };
+}
 
   function toLocalCustomer(row) {
     return {
@@ -220,17 +223,23 @@
   async function saveProduct(payload) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
+    // FIX: Each price is independent — never fall back to retail
+    // Use explicit null coalescing so 0 is stored as 0, not overwritten
+    const _retail    = Number(payload.retailPrice    ?? payload.price ?? 0);
+    const _wholesale = Number(payload.wholesalePrice ?? 0);
+    const _carton    = Number(payload.cartonPrice    ?? 0);
+
     const row = {
       name:            payload.name,
-      sku:             payload.sku             || null,
-      category:        payload.category        || 'General',
-      price:           Number(payload.price         || payload.retailPrice    || 0),
-      retail_price:    Number(payload.retailPrice   || payload.price          || 0),
-      wholesale_price: Number(payload.wholesalePrice || payload.price          || 0),
-      carton_price:    Number(payload.cartonPrice    || payload.wholesalePrice || payload.price || 0),
-      stock_alabar:    Number(payload.stockAlabar   || 0),
-      stock_morocco:   Number(payload.stockMorocco  || 0),
-      reorder_level:   Number(payload.reorder       || 5),
+      sku:             payload.sku      || null,
+      category:        payload.category || 'General',
+      price:           _retail,
+      retail_price:    _retail,
+      wholesale_price: _wholesale,
+      carton_price:    _carton,
+      stock_alabar:    Number(payload.stockAlabar  || 0),
+      stock_morocco:   Number(payload.stockMorocco || 0),
+      reorder_level:   Number(payload.reorder      || 5),
       updated_at:      new Date().toISOString()
     };
     if (payload.id && !String(payload.id).startsWith('p_')) row.id = payload.id;

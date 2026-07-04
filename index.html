@@ -377,20 +377,45 @@
     <div class="pm-btn" id="pm-momo" onclick="selectPayMethod('momo')">📱 Mobile Money</div>
   </div>
   <div id="momo-number-row" style="display:none;margin-top:10px">
-    <label class="form-label">MoMo Number (optional)</label>
-    <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
+  <label class="form-label">MoMo Number (optional)</label>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <input type="checkbox" id="momo-same-as-mine" onchange="toggleMomoSameAsMe(this)">
+    <label for="momo-same-as-mine" style="font-size:13px;cursor:pointer;margin:0">Same number</label>
   </div>
+   <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
 </div>
-
+</div>
 <div class="form-group">
   <label class="form-label">Address</label>
   <input class="form-input" id="inv-cust-addr" placeholder="Optional">
 </div>
 
+<!-- CUSTOMER TYPE SELECTOR -->
+<div class="form-group" style="margin-bottom:14px">
+  <label class="form-label">Customer Type *</label>
+  <div style="display:flex;gap:8px;margin-top:6px">
+    <div id="ctype-retail" onclick="selectCustomerType('retail')"
+      style="flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)">
+      🏪 Retail
+    </div>
+    <div id="ctype-wholesale" onclick="selectCustomerType('wholesale')"
+      style="flex:1;padding:9px;border:2px solid var(--brand-brown);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--brand-brown)">
+      📦 Wholesale
+    </div>
+    <div id="ctype-carton" onclick="selectCustomerType('carton')"
+      style="flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)">
+      🗃️ Carton
+    </div>
+  </div>
+  <div style="font-size:11px;color:var(--gray-400);margin-top:5px;font-family:var(--font-mono)">
+    Selecting a type prices ALL items automatically
+  </div>
+</div>
+
 <label class="form-label">Line Items *</label>
 <div class="line-items-wrap">
-  <div class="li-header">
-    <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+  <div class="li-header" style="grid-template-columns:2fr 70px 120px 30px">
+    <span>Product</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
   </div>
   <div id="line-items-body"></div>
 </div>
