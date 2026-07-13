@@ -234,6 +234,7 @@
             </select>
             <div style="flex:1"></div>
             <button class="btn btn-primary" onclick="openInvoiceModal()">+ New Invoice</button>
+            <button class="btn btn-secondary" onclick="openInvoiceModal('cash')">💵 Cash Sale</button>
           </div>
           <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Customer</th><th>Location</th><th>Items</th><th>Total</th><th>Status</th><th>Payment</th><th>By</th><th></th></tr></thead><tbody id="invoices-body"></tbody></table></div>
         </div>
@@ -348,9 +349,9 @@
 <!-- New Invoice -->
 <div class="modal-overlay" id="invoice-modal">
   <div class="modal">
-    <div class="modal-header"><div class="modal-title">New Invoice</div><button class="modal-close" onclick="closeModal('invoice-modal')">×</button></div>
+    <div class="modal-header"><div class="modal-title" id="invoice-modal-title">New Invoice</div><button class="modal-close" onclick="closeModal('invoice-modal')">×</button></div>
     <div class="modal-body">
-      <div class="form-grid">
+      <div class="form-grid" id="inv-fg-name-phone">
         <div class="form-group">
           <label class="form-label">Customer Name *</label>
           <input class="form-input" id="inv-cust-name" placeholder="Type or select…" oninput="suggestCustomers(this.value)" autocomplete="off">
@@ -360,7 +361,7 @@
       </div>
       <div class="form-grid">
         <div class="form-group"><label class="form-label">Location *</label><select class="form-select" id="inv-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
-        <div class="form-group">
+        <div class="form-group" id="inv-fg-status">
           <label class="form-label">Payment Status</label>
           <select class="form-select" id="inv-status" onchange="onStatusChange()">
             <option value="pending">Pending</option>
@@ -385,7 +386,7 @@
    <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
 </div>
 </div>
-<div class="form-group">
+<div class="form-group" id="inv-fg-address">
   <label class="form-label">Address</label>
   <input class="form-input" id="inv-cust-addr" placeholder="Optional">
 </div>
@@ -439,7 +440,7 @@
 <div class="modal-footer">
   <button class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
   <div class="modal-footer-right">
-    <button class="btn btn-primary" onclick="createInvoice()">Create Invoice</button>
+    <button class="btn btn-primary" id="invoice-submit-btn" onclick="createInvoice()">Create Invoice</button>
   </div>
 </div>
 
@@ -501,7 +502,10 @@
         </div>
       </div>
 
-      <label class="form-label">Line Items</label>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <label class="form-label" style="margin:0">Line Items</label>
+        <span id="edit-price-type-badge" class="badge badge-neutral" style="font-size:11px"></span>
+      </div>
       <div class="line-items-wrap">
         <div class="li-header">
           <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>

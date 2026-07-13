@@ -738,7 +738,7 @@ function renderDashboard() {
   const recent = [...invoices].sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt)).slice(0,6);
   document.getElementById('dash-recent-body').innerHTML = recent.length === 0
     ? '<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:32px">No invoices yet</td></tr>'
-    : recent.map(i => '<tr style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')"><td class="mono">'+i.number+'</td><td>'+i.customerName+'</td><td class="mono">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td></tr>').join('');
+    : recent.map(i => '<tr style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')"><td class="mono">'+escapeHtml(i.number)+'</td><td>'+escapeHtml(i.customerName)+'</td><td class="mono">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td></tr>').join('');
 
   const effLoc  = isAdmin() ? currentLocation : currentUser.location;
   const lowStock = getProducts().filter(p => { const s = effLoc==='Morocco'?p.stockMorocco:effLoc==='Alabar'?p.stockAlabar:Math.min(p.stockAlabar,p.stockMorocco); return s <= p.reorder; }).slice(0,6);
@@ -749,7 +749,7 @@ function renderDashboard() {
         const pct   = Math.min(100, Math.round(stock/Math.max(p.reorder*2,1)*100));
         const cls   = stock===0?'critical':'low';
         const adjBtn = isAdmin()?'<button class="btn btn-secondary btn-sm" onclick="openStockAdjust(\''+p.id+'\')">Adjust</button>':'';
-        return '<div class="low-stock-item"><div style="flex:1"><div style="font-size:13px;font-weight:500">'+p.name+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">Stock: '+stock+' · Reorder: '+p.reorder+'</div><div class="stock-bar-wrap" style="margin-top:6px"><div class="stock-bar '+cls+'" style="width:'+pct+'%"></div></div></div>'+adjBtn+'</div>';
+        return '<div class="low-stock-item"><div style="flex:1"><div style="font-size:13px;font-weight:500">'+escapeHtml(p.name)+'</div><div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono)">Stock: '+stock+' · Reorder: '+p.reorder+'</div><div class="stock-bar-wrap" style="margin-top:6px"><div class="stock-bar '+cls+'" style="width:'+pct+'%"></div></div></div>'+adjBtn+'</div>';
       }).join('');
 
   const todayCash = todayInvs.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);
@@ -800,20 +800,29 @@ function renderInvoices() {
   const tbody = document.getElementById('invoices-body');
   tbody.innerHTML = invoices.length===0
     ? '<tr><td colspan="10" style="text-align:center;color:var(--gray-400);padding:40px">No invoices found</td></tr>'
-    : invoices.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+i.number+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td>'+i.customerName+'</td><td><span class="badge badge-neutral">'+i.location+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td><td>'+(i.payMethod==='cash'?'💵 Cash':i.payMethod==='momo'?'📱 MoMo':'—')+'</td><td style="color:var(--gray-400);font-size:12px">'+(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
+    : invoices.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+escapeHtml(i.number)+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td>'+escapeHtml(i.customerName)+'</td><td><span class="badge badge-neutral">'+escapeHtml(i.location)+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td><td>'+(i.payMethod==='cash'?'💵 Cash':i.payMethod==='momo'?'📱 MoMo':'—')+'</td><td style="color:var(--gray-400);font-size:12px">'+escapeHtml(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
 }
 function filterInvoices(val)      { invoiceFilter.text=val;   renderInvoices(); }
 function filterInvoiceStatus(val) { invoiceFilter.status=val; renderInvoices(); }
 
-function openInvoiceModal() {
+function _walkInName() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return 'Walk-in - ' + pad(now.getDate()) + '/' + pad(now.getMonth()+1) + '/' + now.getFullYear() +
+    ' ' + pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+}
+
+function openInvoiceModal(mode) {
+  mode = mode === 'cash' ? 'cash' : 'invoice';
+  window._invoiceMode = mode;
+
   lineItemCount = 0;
   document.getElementById('line-items-body').innerHTML = '';
   ['inv-cust-name','inv-cust-phone','inv-cust-addr','inv-notes','inv-momo-number'].forEach(id=>{ const el=document.getElementById(id); if(el) el.value=''; });
   document.getElementById('inv-status').value = 'pending';
   document.getElementById('invoice-total-display').textContent = 'Total: GH₵ 0.00';
-  // Reset customer type to wholesale (default since all prices are wholesale)
-  window._invoicePriceType = 'wholesale';
-  _updateCustomerTypePills('wholesale');
+  const discEl = document.getElementById('inv-discount');
+  if (discEl) discEl.value = 0;
   const _pmRow   = document.getElementById('payment-method-row');
   const _momoRow = document.getElementById('momo-number-row');
   const _pmCash  = document.getElementById('pm-cash');
@@ -825,6 +834,35 @@ function openInvoiceModal() {
   window._selectedPayMethod = '';
   const locSel = document.getElementById('inv-location');
   if (!isAdmin()) { locSel.value = currentUser.location; locSel.disabled = true; } else locSel.disabled = false;
+
+  const titleEl   = document.getElementById('invoice-modal-title');
+  const submitBtn = document.getElementById('invoice-submit-btn');
+  const namePhone = document.getElementById('inv-fg-name-phone');
+  const addr      = document.getElementById('inv-fg-address');
+  const statusFg  = document.getElementById('inv-fg-status');
+
+  if (mode === 'cash') {
+    if (namePhone) namePhone.style.display = 'none';
+    if (addr)      addr.style.display      = 'none';
+    if (statusFg)  statusFg.style.display  = 'none';
+    document.getElementById('inv-cust-name').value = _walkInName();
+    document.getElementById('inv-status').value = 'paid';
+    window._selectedPayMethod = 'cash';
+    window._invoicePriceType = 'retail';
+    _updateCustomerTypePills('retail');
+    if (titleEl)   titleEl.textContent   = 'Cash Sale';
+    if (submitBtn) submitBtn.textContent = 'Complete Sale';
+  } else {
+    if (namePhone) namePhone.style.display = '';
+    if (addr)      addr.style.display      = '';
+    if (statusFg)  statusFg.style.display  = '';
+    // Reset customer type to wholesale (default since all prices are wholesale)
+    window._invoicePriceType = 'wholesale';
+    _updateCustomerTypePills('wholesale');
+    if (titleEl)   titleEl.textContent   = 'New Invoice';
+    if (submitBtn) submitBtn.textContent = 'Create Invoice';
+  }
+
   addLineItem();
   openModal('invoice-modal');
 }
@@ -1028,6 +1066,7 @@ async function createInvoice() {
       renderDashboard();
       if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
       try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
+      if (window._invoiceMode === 'cash') printInvoice(invoice);
       return;
     } catch (err) {
       console.error('Invoice creation error:', err);
@@ -1049,6 +1088,7 @@ async function createInvoice() {
   renderDashboard();
   if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
   try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
+  if (window._invoiceMode === 'cash') printInvoice(invoice);
 }
 
 function viewInvoice(id) {
@@ -1464,6 +1504,11 @@ function openEditInvoiceModal(id) {
   document.querySelector('#edit-status').value        = inv.status || 'pending';
   document.querySelector('#edit-pay-method').value    = inv.payMethod || '';
 
+  // All line items are locked to the invoice's original customer type
+  window._editInvoicePriceType = (inv.items && inv.items[0] && inv.items[0].priceType) || 'wholesale';
+  const badge = document.getElementById('edit-price-type-badge');
+  if (badge) badge.textContent = 'Pricing: ' + window._editInvoicePriceType[0].toUpperCase() + window._editInvoicePriceType.slice(1);
+
   // FIX #2 / #6: renderEditItems pulls fresh products each time
   renderEditItems(inv.items || []);
 
@@ -1593,6 +1638,8 @@ function addItem(item = {}) {
   // qty: empty placeholder unless editing existing item
   const qtyVal   = item.qty   != null ? escAttr(item.qty)   : '';
   const priceVal = item.price != null ? escAttr(item.price) : '';
+  // Sale type is locked to the invoice's customer type — no per-row override
+  const rowPriceType = window._editInvoicePriceType || 'wholesale';
 
   row.innerHTML = `
     <input type="text"
@@ -1604,12 +1651,7 @@ function addItem(item = {}) {
       style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
     <datalist id="pl-${uid}">${opts}</datalist>
 
-    <select onchange="onEditItemInput('${uid}')"
-      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
-      <option value="retail"    ${(item.priceType || 'retail') === 'retail'    ? 'selected' : ''}>Retail</option>
-      <option value="wholesale" ${item.priceType === 'wholesale' ? 'selected' : ''}>Wholesale</option>
-      <option value="carton"    ${item.priceType === 'carton'    ? 'selected' : ''}>Carton</option>
-    </select>
+    <span style="padding:5px 2px;font-size:12px;color:var(--gray-500);text-transform:capitalize;font-family:var(--font-sans)">${escapeHtml(rowPriceType)}</span>
 
     <input type="number" value="${qtyVal}" min="1" placeholder="Qty" oninput="calcEditTotal()"
       style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
@@ -1633,7 +1675,7 @@ function onEditItemInput(uid) {
   const inputs     = row.querySelectorAll('input');
   const priceInput = inputs[2];
   const name       = inputs[0].value.trim();
-  const priceType  = row.querySelector('select')?.value || 'retail';
+  const priceType  = window._editInvoicePriceType || 'wholesale';
 
   const product = getProducts().find(p =>
     p.name.toLowerCase() === name.toLowerCase()
@@ -1663,7 +1705,7 @@ function collectEditedItems() {
   rows.forEach(row => {
     const inputs    = row.querySelectorAll('input');
     const name      = inputs[0].value.trim();
-    const priceType = row.querySelector('select')?.value || 'retail';
+    const priceType = window._editInvoicePriceType || 'wholesale';
     const qty       = parseInt(inputs[1].value) || 0;
     // Read price robustly — handle readonly fields in all browsers
     const priceInput = inputs[2];
@@ -1742,7 +1784,13 @@ function suggestCustomers(val) {
   const matches=getCustomers().filter(c=>c.name.toLowerCase().includes(val.toLowerCase())&&c.location===loc).slice(0,5);
   if(matches.length===0){box.style.display='none';return;}
   box.style.display='block';
-  box.innerHTML=matches.map(c=>'<div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--gray-50)" onmousedown="selectCustomerSuggestion(\''+c.name.replace(/'/g,"\\'")+'\'  ,\''+  (c.phone||'').replace(/'/g,"\\'")  +'\',\''+  (c.address||'').replace(/'/g,"\\'")  +'\')" onmouseover="this.style.background=\'var(--gray-50)\'" onmouseout="this.style.background=\'\'"><strong>'+escapeHtml(c.name)+'</strong>'+(c.phone?'<span style="color:var(--gray-400);font-size:11px;margin-left:6px">'+escapeHtml(c.phone)+'</span>':'')+'</div>').join('');
+  // JSON.stringify safely encodes each value as a JS string literal; escAttr then
+  // HTML-escapes the whole thing so it's safe inside the double-quoted attribute
+  // (fixes attribute-injection XSS for names containing a double quote).
+  box.innerHTML=matches.map(c=>{
+    const call = 'selectCustomerSuggestion(' + JSON.stringify(c.name||'') + ',' + JSON.stringify(c.phone||'') + ',' + JSON.stringify(c.address||'') + ')';
+    return '<div style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid var(--gray-50)" onmousedown="'+escAttr(call)+'" onmouseover="this.style.background=\'var(--gray-50)\'" onmouseout="this.style.background=\'\'"><strong>'+escapeHtml(c.name)+'</strong>'+(c.phone?'<span style="color:var(--gray-400);font-size:11px;margin-left:6px">'+escapeHtml(c.phone)+'</span>':'')+'</div>';
+  }).join('');
 }
 function selectCustomerSuggestion(name,phone,addr) { document.getElementById('inv-cust-name').value=name; document.getElementById('inv-cust-phone').value=phone; document.getElementById('inv-cust-addr').value=addr; document.getElementById('cust-suggestions').style.display='none'; }
 
@@ -2209,8 +2257,8 @@ document.getElementById('global-search')?.addEventListener('input', e => globalS
 // ============================================================
 // PRINT INVOICE
 // ============================================================
-function printInvoice() {
-  const inv = getAllInvoices().find(i => i.id === viewingInvoiceId);
+function printInvoice(inv) {
+  inv = inv || getAllInvoices().find(i => i.id === viewingInvoiceId);
   if (!inv) return;
 
   const pmLine = inv.payMethod
