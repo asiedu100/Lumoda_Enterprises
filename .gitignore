@@ -9,3 +9,16 @@ build/
 .DS
 supabase/.temp/
 supabase-config.js
+
+# Raw/original product photos (large, unoptimized) — only images/ (the
+# resized+compressed copies actually used on the site) should be committed.
+/cook*.jpg
+/knife*.jpg
+/glass*.jpg
+/LUMOO*.jpg
+/blender.jpg
+/wooden.jpg
+/kettle.jpg
+/toaster.jpg
+/coffeemaker.jpg
+/ricecooker.jpg
