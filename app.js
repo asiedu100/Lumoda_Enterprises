@@ -23,6 +23,13 @@ let editingProductId  = null;
 let viewingInvoiceId  = null;
 let lineItemCount     = 0;
 let invoiceSaving     = false;
+let editInvoiceSaving = false;
+// Single source of truth for branch names. Dropdowns/filter tabs are
+// re-rendered from this list (see renderLocationSelects()) instead of each
+// hardcoding its own <option> set, so adding a branch here is one line —
+// though product stock (stockAlabar/stockMorocco) is still fixed-column and
+// NOT covered by this: that needs a real schema migration, not a JS change.
+const LOCATIONS = ['Alabar', 'Morocco'];
 let inactivityTimer   = null;
 let warningTimer      = null;
 let countdownInterval = null;
@@ -224,10 +231,16 @@ function showSessionWarning() {
 
 function stayLoggedIn() { resetInactivityTimer(); }
 
-function forceLogout(reason) {
+async function forceLogout(reason) {
   clearTimeout(inactivityTimer); clearTimeout(warningTimer); clearInterval(countdownInterval);
   if (currentUser) addAudit('Auto Logout', `Session ended — ${reason}`);
+  // Must revoke the underlying Supabase session too, not just local session
+  // bookkeeping — otherwise a page refresh silently re-authenticates the user.
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try { await window.LumodaSupabase.signOut(); } catch (e) {}
+  }
   destroySession();
+  stopActivityTracking();
   currentUser = null;
   showAuthScreen();
   toast('You were logged out due to inactivity.', 'error');
@@ -330,7 +343,7 @@ async function doLogin() {
       setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
       await syncSupabaseCache();
       addAudit('Login', `"${currentUser.fullName}" signed in with Supabase [${currentUser.location}]`);
-      showApp();
+      if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }
       return;
     } catch (err) {
       errEl.textContent = err.message || 'Supabase login failed.';
@@ -408,6 +421,7 @@ function showApp() {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('change-pw-screen').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
+  renderLocationSelects();
   updateUserUI(); buildNavForRole();
   const startPage = (currentUser && currentUser.role === 'warehouse_manager') ? 'warehouse' : 'dashboard';
   navigate(startPage, null);
@@ -512,6 +526,9 @@ function updateUserUI() {
 function navigate(page, el) {
   if (!isAdmin() && ['reports','audit','users'].includes(page)) { toast('Access denied', 'error'); return; }
   if (currentUser && currentUser.role === 'warehouse_manager' && page !== 'warehouse' && page !== 'settings') { toast('Access denied', 'error'); return; }
+  // Warehouse is only for admins and warehouse managers — nav hides it for everyone
+  // else, but that alone doesn't stop navigate('warehouse') being called directly.
+  if (page === 'warehouse' && !isAdmin() && (!currentUser || currentUser.role !== 'warehouse_manager')) { toast('Access denied', 'error'); return; }
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pageEl = document.getElementById('page-' + page);
@@ -542,6 +559,29 @@ function switchLocFilter(loc, el) {
   if (!isAdmin()) return;
   document.querySelectorAll('.loc-tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active'); currentLocation = loc; refreshAll();
+}
+
+// Keeps the plain location <select>s and the loc-filter tabs in sync with
+// LOCATIONS. The HTML ships with matching static <option>s as a sane
+// fallback, this just makes them derive from one array going forward.
+function renderLocationSelects() {
+  const opts = LOCATIONS.map(l => '<option value="'+escAttr(l)+'">'+escapeHtml(l)+'</option>').join('');
+  ['inv-location','cust-location','stock-location','new-user-location'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const prev = el.value;
+    el.innerHTML = opts;
+    if (LOCATIONS.includes(prev)) el.value = prev;
+  });
+
+  const filterEl = document.getElementById('loc-filter');
+  if (!filterEl) return;
+  const activeLoc = filterEl.querySelector('.loc-tab.active')?.dataset.loc || 'All';
+  filterEl.innerHTML = '<div class="loc-tab" data-loc="All" onclick="switchLocFilter(\'All\',this)">All</div>' +
+    LOCATIONS.map(l => '<div class="loc-tab" data-loc="'+escAttr(l)+'" onclick="switchLocFilter(\''+l+'\',this)">'+escapeHtml(l)+'</div>').join('');
+  const tabs  = Array.from(filterEl.querySelectorAll('.loc-tab'));
+  const match = tabs.find(t => t.dataset.loc === activeLoc) || tabs[0];
+  if (match) match.classList.add('active');
 }
 
 function refreshAll() {
@@ -675,13 +715,17 @@ function refreshAllLineItemDataLists() {
 // CUSTOMER TYPE SELECTOR — sets price type for ALL line items
 // ============================================================
 function selectCustomerType(type) {
+  // Sets the default for any new row added afterward, and bulk-applies to
+  // every row currently on the invoice (each row can still be individually
+  // changed afterward via its own sale-type select).
   window._invoicePriceType = type;
   _updateCustomerTypePills(type);
-  // Update ALL existing line item prices immediately
   document.querySelectorAll('#line-items-body .line-item-row').forEach(row => {
     const inputs = row.querySelectorAll('input');
     const name   = inputs[0].value.trim();
     const pi     = inputs[2];
+    const sel    = row.querySelector('select');
+    if (sel) sel.value = type;
     const product = getProducts().find(p => p.name.toLowerCase() === name.toLowerCase());
     if (product) {
       pi.removeAttribute('readonly');
@@ -917,17 +961,25 @@ function toggleMomoSameAsMe(checkbox) {
   }
 }
 
-// FIX: quantity starts empty, no per-item type dropdown (global type selector used)
+// Each row has its own sale-type select — the Customer Type pills bulk-apply
+// to all current rows and seed the default for new ones, but a customer can
+// still buy some products carton/wholesale and others retail on one invoice.
 function addLineItem() {
   const id   = lineItemCount++;
   const opts = getProducts().map(p=>'<option value="'+escAttr(p.name)+'">'+escapeHtml(p.name)+'</option>').join('');
+  const defaultType = window._invoicePriceType || 'wholesale';
   const row  = document.createElement('div');
   row.className = 'line-item-row'; row.id = 'li-'+id;
   row.innerHTML =
     '<input type="text" list="pl-'+id+'" placeholder="Product name" oninput="onLineItemInput('+id+')" onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
     '<datalist id="pl-'+id+'">'+opts+'</datalist>'+
+    '<select onchange="onLineItemInput('+id+')" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
+      '<option value="retail"'+(defaultType==='retail'?' selected':'')+'>Retail</option>'+
+      '<option value="wholesale"'+(defaultType==='wholesale'?' selected':'')+'>Wholesale</option>'+
+      '<option value="carton"'+(defaultType==='carton'?' selected':'')+'>Carton</option>'+
+    '</select>'+
     '<input type="number" placeholder="Qty" min="1" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">'+
-    '<input type="number" placeholder="0.00" min="0" step="0.01" readonly title="Price set by customer type" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">'+
+    '<input type="number" placeholder="0.00" min="0" step="0.01" readonly title="Price set by sale type" oninput="calcTotal()" style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none;background:var(--gray-50);color:var(--gray-400);cursor:not-allowed">'+
     '<button class="remove-item" onclick="removeLineItem('+id+')">×</button>';
   document.getElementById('line-items-body').appendChild(row);
 }
@@ -937,9 +989,9 @@ function onLineItemInput(id) {
   if (!row) return;
   const inputs    = row.querySelectorAll('input');
   const ni        = inputs[0];
-  // FIX: price index is now 1=qty, 2=price (no select dropdown in row)
+  // inp[0]=name, inp[1]=qty, inp[2]=price — <select> isn't matched by querySelectorAll('input')
   const pi        = inputs[2];
-  const priceType = window._invoicePriceType || 'wholesale';
+  const priceType = row.querySelector('select')?.value || window._invoicePriceType || 'wholesale';
   const m         = getProducts().find(p => p.name.toLowerCase() === ni.value.toLowerCase());
   if (m) {
     const newPrice = productPriceForType(m, priceType);
@@ -962,7 +1014,7 @@ function calcTotal() {
     // inp[0]=name(text), inp[1]=qty(number), inp[2]=price(number)
     subtotal += (parseFloat(inp[1].value) || 0) * (parseFloat(inp[2].value) || 0);
   });
-  const discount = parseFloat(document.getElementById('inv-discount')?.value) || 0;
+  const discount = Math.max(0, parseFloat(document.getElementById('inv-discount')?.value) || 0);
   const total = Math.max(0, subtotal - discount);
   document.getElementById('invoice-total-display').textContent =
     'Subtotal: ' + fmtGHS(subtotal) +
@@ -980,16 +1032,17 @@ async function createInvoice() {
   const loc        = document.getElementById('inv-location').value;
   const status     = document.getElementById('inv-status').value;
   const notes      = document.getElementById('inv-notes').value.trim();
-  const discount   = parseFloat(document.getElementById('inv-discount')?.value) || 0;
+  const discount   = Math.max(0, parseFloat(document.getElementById('inv-discount')?.value) || 0);
   const momoEl     = document.getElementById('inv-momo-number');
   const momoNumber = momoEl ? momoEl.value.trim() : '';
 
-  if (status === 'paid' && !window._selectedPayMethod) {
+  const needsPayMethod = status === 'paid' || status === 'partial';
+  if (needsPayMethod && !window._selectedPayMethod) {
     invoiceSaving = false;
     toast('Please select Cash or Mobile Money', 'error');
     return;
   }
-  const payMethod = status === 'paid' ? (window._selectedPayMethod || '') : '';
+  const payMethod = needsPayMethod ? (window._selectedPayMethod || '') : '';
 
   if (!name) { invoiceSaving = false; toast('Customer name is required', 'error'); return; }
 
@@ -998,14 +1051,14 @@ async function createInvoice() {
 
   const items = [];
   let valid = true;
-  const globalPriceType = window._invoicePriceType || 'wholesale';
   rows.forEach(row => {
     const inp = row.querySelectorAll('input');
     const pn  = inp[0].value.trim();
     const qty   = parseInt(inp[1].value) || 0;
     const price = parseFloat(inp[2].value) || 0;
+    const priceType = row.querySelector('select')?.value || window._invoicePriceType || 'wholesale';
     if (!pn || qty < 1 || price <= 0) { valid = false; return; }
-    items.push({ name: pn, priceType: globalPriceType, qty, price, total: qty * price });
+    items.push({ name: pn, priceType, qty, price, total: qty * price });
   });
 
   if (!valid) { invoiceSaving = false; toast('Fill in all item fields (name, qty, price)', 'error'); return; }
@@ -1504,10 +1557,15 @@ function openEditInvoiceModal(id) {
   document.querySelector('#edit-status').value        = inv.status || 'pending';
   document.querySelector('#edit-pay-method').value    = inv.payMethod || '';
 
-  // All line items are locked to the invoice's original customer type
-  window._editInvoicePriceType = (inv.items && inv.items[0] && inv.items[0].priceType) || 'wholesale';
-  const badge = document.getElementById('edit-price-type-badge');
-  if (badge) badge.textContent = 'Pricing: ' + window._editInvoicePriceType[0].toUpperCase() + window._editInvoicePriceType.slice(1);
+  // Default sale type for any NEW row added during this edit — the mode
+  // (most common) type across existing items, not a lock on every row.
+  // Customers can legitimately buy some products carton/wholesale and
+  // others retail within the same invoice, so each row keeps its own type.
+  const typeCounts = {};
+  (inv.items || []).forEach(it => { const t = it.priceType || 'wholesale'; typeCounts[t] = (typeCounts[t] || 0) + 1; });
+  let modeType = 'wholesale', modeCount = 0;
+  Object.keys(typeCounts).forEach(t => { if (typeCounts[t] > modeCount) { modeType = t; modeCount = typeCounts[t]; } });
+  window._editInvoicePriceType = modeType;
 
   // FIX #2 / #6: renderEditItems pulls fresh products each time
   renderEditItems(inv.items || []);
@@ -1516,16 +1574,36 @@ function openEditInvoiceModal(id) {
 }
 
 async function saveEditedInvoice() {
+  if (editInvoiceSaving) return;
+  editInvoiceSaving = true;
+
   const id       = editingInvoiceId;
   const existing = getAllInvoices().find(i => i.id === id);
-  if (!requireInvoiceEdit(existing, 'edit')) return;
+  if (!requireInvoiceEdit(existing, 'edit')) { editInvoiceSaving = false; return; }
+
+  const rows = document.querySelectorAll('#edit-items-container .line-item-row');
+  if (rows.length === 0) { editInvoiceSaving = false; toast('Add at least one item', 'error'); return; }
+
+  // Every row must be fully valid — don't silently drop incomplete rows (e.g. a
+  // product whose locked price tier resolves to 0), block save with a toast instead.
+  let allValid = true;
+  rows.forEach(row => {
+    const inputs = row.querySelectorAll('input');
+    const name   = inputs[0].value.trim();
+    const qty    = parseInt(inputs[1].value) || 0;
+    const priceInput = inputs[2];
+    const price  = parseFloat(priceInput.value) || parseFloat(priceInput.getAttribute('value')) || 0;
+    if (!name || qty < 1 || price <= 0) allValid = false;
+  });
+  if (!allValid) { editInvoiceSaving = false; toast('Fill in all item fields (name, qty, price)', 'error'); return; }
 
   const items = collectEditedItems();
-  if (!items.length) { toast('Add at least one item', 'error'); return; }
+  if (!items.length) { editInvoiceSaving = false; toast('Add at least one item', 'error'); return; }
 
-  const status    = document.querySelector('#edit-status').value || 'pending';
-  const payMethod = status === 'paid' ? document.querySelector('#edit-pay-method').value : '';
-  if (status === 'paid' && !payMethod) { toast('Select a payment method for paid invoices', 'error'); return; }
+  const status = document.querySelector('#edit-status').value || 'pending';
+  const needsPayMethod = status === 'paid' || status === 'partial';
+  const payMethod = needsPayMethod ? document.querySelector('#edit-pay-method').value : '';
+  if (needsPayMethod && !payMethod) { editInvoiceSaving = false; toast('Select a payment method for paid/partial invoices', 'error'); return; }
 
   const subtotal = calculateTotal(items);
   const updates  = {
@@ -1541,6 +1619,7 @@ async function saveEditedInvoice() {
   };
 
   const saved = await updateInvoice(id, updates);
+  editInvoiceSaving = false;
   if (saved) closeModal('edit-invoice-modal');
 }
 
@@ -1638,8 +1717,9 @@ function addItem(item = {}) {
   // qty: empty placeholder unless editing existing item
   const qtyVal   = item.qty   != null ? escAttr(item.qty)   : '';
   const priceVal = item.price != null ? escAttr(item.price) : '';
-  // Sale type is locked to the invoice's customer type — no per-row override
-  const rowPriceType = window._editInvoicePriceType || 'wholesale';
+  // Existing items keep their own stored sale type; a brand-new row defaults
+  // to the invoice's dominant type but can still be changed per-row.
+  const rowPriceType = item.priceType || window._editInvoicePriceType || 'wholesale';
 
   row.innerHTML = `
     <input type="text"
@@ -1651,7 +1731,12 @@ function addItem(item = {}) {
       style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
     <datalist id="pl-${uid}">${opts}</datalist>
 
-    <span style="padding:5px 2px;font-size:12px;color:var(--gray-500);text-transform:capitalize;font-family:var(--font-sans)">${escapeHtml(rowPriceType)}</span>
+    <select onchange="onEditItemInput('${uid}')"
+      style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
+      <option value="retail"    ${rowPriceType === 'retail'    ? 'selected' : ''}>Retail</option>
+      <option value="wholesale" ${rowPriceType === 'wholesale' ? 'selected' : ''}>Wholesale</option>
+      <option value="carton"    ${rowPriceType === 'carton'    ? 'selected' : ''}>Carton</option>
+    </select>
 
     <input type="number" value="${qtyVal}" min="1" placeholder="Qty" oninput="calcEditTotal()"
       style="padding:5px 7px;border:1px solid var(--gray-200);border-radius:var(--radius);font-size:12px;width:100%;font-family:var(--font-sans);outline:none">
@@ -1675,7 +1760,7 @@ function onEditItemInput(uid) {
   const inputs     = row.querySelectorAll('input');
   const priceInput = inputs[2];
   const name       = inputs[0].value.trim();
-  const priceType  = window._editInvoicePriceType || 'wholesale';
+  const priceType  = row.querySelector('select')?.value || window._editInvoicePriceType || 'wholesale';
 
   const product = getProducts().find(p =>
     p.name.toLowerCase() === name.toLowerCase()
@@ -1705,7 +1790,7 @@ function collectEditedItems() {
   rows.forEach(row => {
     const inputs    = row.querySelectorAll('input');
     const name      = inputs[0].value.trim();
-    const priceType = window._editInvoicePriceType || 'wholesale';
+    const priceType = row.querySelector('select')?.value || window._editInvoicePriceType || 'wholesale';
     const qty       = parseInt(inputs[1].value) || 0;
     // Read price robustly — handle readonly fields in all browsers
     const priceInput = inputs[2];
@@ -1825,12 +1910,15 @@ async function saveProduct(){
   const name=document.getElementById('prod-name').value.trim();
   const price=parseFloat(document.getElementById('prod-price').value);
   if(!name||isNaN(price)){toast('Name and retail price required','error');return;}
+  if(price<0){toast('Retail price cannot be negative','error');return;}
   const wholesalePrice=parseFloat(document.getElementById('prod-wholesale-price').value);
   const cartonPrice=parseFloat(document.getElementById('prod-carton-price').value);
+  if((!isNaN(wholesalePrice)&&wholesalePrice<0)||(!isNaN(cartonPrice)&&cartonPrice<0)){toast('Prices cannot be negative','error');return;}
   const products=getProducts();
   const sA=parseInt(document.getElementById('prod-stock-alabar').value)||0;
   const sM=parseInt(document.getElementById('prod-stock-morocco').value)||0;
   const reorder=parseInt(document.getElementById('prod-reorder').value)||5;
+  if(sA<0||sM<0||reorder<0){toast('Stock and reorder level cannot be negative','error');return;}
   const sku=document.getElementById('prod-sku').value.trim()||'SKU-'+Date.now();
   const cat=document.getElementById('prod-category').value.trim()||'General';
   // FIX: if wholesale/carton fields are left blank when editing,
@@ -1894,7 +1982,65 @@ function orderStock(){if(!requireAdmin('order stock'))return;const low=getProduc
 // ============================================================
 let adjustingProductId=null;
 function openStockAdjust(pid){if(!requireAdmin('adjust stock'))return;adjustingProductId=pid;const prod=getProducts().find(p=>p.id===pid);if(!prod)return;document.getElementById('stock-prod-name').value=prod.name;document.getElementById('stock-qty').value='';document.getElementById('stock-note').value='';document.getElementById('stock-type').value='Purchase';openModal('stock-modal');}
-function applyStockAdjustment(){if(!requireAdmin('adjust stock'))return;const loc=document.getElementById('stock-location').value;const type=document.getElementById('stock-type').value;const qty=parseInt(document.getElementById('stock-qty').value);const note=document.getElementById('stock-note').value.trim();if(isNaN(qty)||qty===0){toast('Enter a valid quantity','error');return;}const products=getProducts();const idx=products.findIndex(p=>p.id===adjustingProductId);if(idx<0)return;const prod=products[idx];const isAdd=['Purchase','Return'].includes(type);const absQty=Math.abs(qty);const change=isAdd?absQty:-absQty;if(loc==='Alabar'){if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}products[idx].stockAlabar=Math.max(0,prod.stockAlabar+change);}else{if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}products[idx].stockMorocco=Math.max(0,prod.stockMorocco+change);}LS.set('lumoda_products',products);addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" '+(change>0?'+':'')+change+' at '+loc+' ('+type+')');closeModal('stock-modal');toast('Stock updated');renderProducts();renderDashboard();}
+async function applyStockAdjustment(){
+  if(!requireAdmin('adjust stock'))return;
+  const loc=document.getElementById('stock-location').value;
+  const type=document.getElementById('stock-type').value;
+  const qty=parseInt(document.getElementById('stock-qty').value);
+  const note=document.getElementById('stock-note').value.trim();
+  if(isNaN(qty)||qty===0){toast('Enter a valid quantity','error');return;}
+  const products=getProducts();
+  const idx=products.findIndex(p=>p.id===adjustingProductId);
+  if(idx<0)return;
+  const prod=products[idx];
+  const isAdd=['Purchase','Return'].includes(type);
+  const absQty=Math.abs(qty);
+  const change=isAdd?absQty:-absQty;
+  let newStockAlabar=prod.stockAlabar, newStockMorocco=prod.stockMorocco;
+  if(loc==='Alabar'){
+    if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}
+    newStockAlabar=Math.max(0,prod.stockAlabar+change);
+  }else{
+    if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}
+    newStockMorocco=Math.max(0,prod.stockMorocco+change);
+  }
+
+  // Must persist the new stock level to Supabase, not just localStorage —
+  // otherwise the next syncSupabaseCache() call (fires after almost every
+  // other action) silently reverts it back to the pre-adjustment value.
+  if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&window.LumodaSupabase.saveProduct){
+    try{
+      const res=await window.LumodaSupabase.saveProduct({
+        id:prod.id, name:prod.name, sku:prod.sku, category:prod.category,
+        price:prod.retailPrice??prod.price, retailPrice:prod.retailPrice??prod.price,
+        wholesalePrice:prod.wholesalePrice, cartonPrice:prod.cartonPrice,
+        stockAlabar:newStockAlabar, stockMorocco:newStockMorocco, reorder:prod.reorder
+      });
+      if(res.error)throw res.error;
+      // Patch the local cache directly instead of a full syncSupabaseCache() —
+      // we already know exactly what was just written (no server-generated
+      // fields like an invoice number are involved here), so a full re-pull
+      // of every product/invoice/customer would just be wasted round-trip time.
+      const cacheIdx=products.findIndex(p=>p.id===prod.id);
+      if(cacheIdx>=0) products[cacheIdx]={...prod,stockAlabar:newStockAlabar,stockMorocco:newStockMorocco};
+      LS.set('lumoda_products',normalizeProducts(products));
+      loadProductSuggestions(getProducts());
+    }catch(err){
+      toast(err.message||'Could not save stock adjustment','error');
+      return;
+    }
+  }else{
+    products[idx]={...prod,stockAlabar:newStockAlabar,stockMorocco:newStockMorocco};
+    LS.set('lumoda_products',products);
+  }
+
+  addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);
+  addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" '+(change>0?'+':'')+change+' at '+loc+' ('+type+')');
+  closeModal('stock-modal');
+  toast('Stock updated');
+  renderProducts();
+  renderDashboard();
+}
 function addStockHistory(productId, productName, location, change, type, note) {
   // Write to localStorage immediately
   const h = getStockHistory();
@@ -1950,7 +2096,7 @@ function filterStockHistory(val){const q=val.toLowerCase();document.querySelecto
 // ============================================================
 function renderReports(){if(!isAdmin())return;const invoices=filterByLoc(getInvoices());const now=new Date();const today=startOfLocalDay(now);const weekStart=startOfWeek(now);const nextWeek=new Date(weekStart);nextWeek.setDate(nextWeek.getDate()+7);const prevWeek=new Date(weekStart);prevWeek.setDate(prevWeek.getDate()-7);const monthStart=new Date(now.getFullYear(),now.getMonth(),1);const todayTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=today));const weekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=weekStart&&t<nextWeek;}));const lastWeekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=prevWeek&&t<weekStart;}));const monthTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=monthStart));const allTotal=sumInvoiceTotal(invoices);document.getElementById('rep-today').textContent=fmtGHS(todayTotal);document.getElementById('rep-week').textContent=fmtGHS(weekTotal);document.getElementById('rep-last-week').textContent=fmtGHS(lastWeekTotal);document.getElementById('rep-week-delta').innerHTML=weekComparisonLabel(weekTotal,lastWeekTotal);document.getElementById('rep-month').textContent=fmtGHS(monthTotal);document.getElementById('rep-alltime').textContent=fmtGHS(allTotal);renderPaymentBreakdown(invoices);renderLocationBreakdown(invoices);renderTopProducts(invoices);renderMonthlyChart(invoices);}
 function renderPaymentBreakdown(invoices){const paid=invoices.filter(i=>i.status==='paid');const cash=paid.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);const momo=paid.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);const uns=paid.filter(i=>!i.payMethod).reduce((s,i)=>s+i.total,0);document.getElementById('payment-breakdown').innerHTML='<div style="display:grid;gap:8px"><div class="stat-card" style="padding:10px"><div class="stat-label">Cash</div><div class="stat-value" style="font-size:18px">'+fmtGHS(cash)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Mobile Money</div><div class="stat-value" style="font-size:18px">'+fmtGHS(momo)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Unspecified Paid</div><div class="stat-value" style="font-size:18px">'+fmtGHS(uns)+'</div></div></div>';}
-function renderLocationBreakdown(invoices){const locs=['Alabar','Morocco'];document.getElementById('location-breakdown').innerHTML=locs.map(l=>{const arr=invoices.filter(i=>i.location===l);return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100)"><span>'+l+'</span><strong>'+fmtGHS(sumInvoiceTotal(arr))+'</strong><span class="mono" style="color:var(--gray-400)">'+arr.length+' inv</span></div>';}).join('');}
+function renderLocationBreakdown(invoices){const locs=LOCATIONS;document.getElementById('location-breakdown').innerHTML=locs.map(l=>{const arr=invoices.filter(i=>i.location===l);return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100)"><span>'+l+'</span><strong>'+fmtGHS(sumInvoiceTotal(arr))+'</strong><span class="mono" style="color:var(--gray-400)">'+arr.length+' inv</span></div>';}).join('');}
 function renderTopProducts(invoices){const map={};invoices.forEach(inv=>inv.items.forEach(it=>{map[it.name]=(map[it.name]||0)+it.total;}));const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);document.getElementById('top-products').innerHTML=top.length?top.map(([n,t],i)=>'<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--gray-100)"><span>'+(i+1)+'. '+escapeHtml(n)+'</span><strong>'+fmtGHS(t)+'</strong></div>').join(''):'<div style="color:var(--gray-400);font-size:13px">No product sales yet</div>';}
 function renderMonthlyChart(invoices){const months=[];const now=new Date();for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const next=new Date(d.getFullYear(),d.getMonth()+1,1);const total=invoices.filter(inv=>{const t=asTimestamp(inv.createdAt);return t>=d&&t<next;}).reduce((s,inv)=>s+inv.total,0);months.push({label:d.toLocaleDateString('en',{month:'short'}),total});}const max=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/max*120);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total):'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');}
 
@@ -2050,7 +2196,7 @@ async function toggleSupabaseUserActive(userId, isActive){
 function openCreateUserModal(){
   if(!requireAdmin('create users'))return;
   ['new-user-fullname','new-user-username','new-user-email'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('new-user-role').value='staff'; document.getElementById('new-user-location').value='Alabar';
+  document.getElementById('new-user-role').value='staff'; document.getElementById('new-user-location').value=LOCATIONS[0];
   document.getElementById('create-user-error').style.display='none';
   document.getElementById('new-user-location-row').style.display='flex';
   openModal('create-user-modal');
@@ -2228,7 +2374,7 @@ let csvRows=[];
 function openCsvModal(){if(!requireAdmin('import CSV'))return;csvRows=[];document.getElementById('csv-file-input').value='';document.getElementById('csv-preview').style.display='none';document.getElementById('csv-import-btn').style.display='none';showCsvError('');openModal('csv-modal');}
 function showCsvError(msg){const e=document.getElementById('csv-error');if(!e)return;e.textContent=msg;e.style.display=msg?'block':'none';}
 function parseCsvLine(line){const out=[];let cur='',inQ=false;for(let i=0;i<line.length;i++){const ch=line[i];if(ch==='"'){if(inQ&&line[i+1]==='"'){cur+='"';i++;}else inQ=!inQ;}else if(ch===','&&!inQ){out.push(cur.trim());cur='';}else cur+=ch;}out.push(cur.trim());return out;}
-function parseCsvFile(input){const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const text=String(reader.result||'');const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)throw new Error('CSV must include headers and at least one product row.');const headers=parseCsvLine(lines[0]).map(h=>h.toLowerCase().replace(/\s+/g,''));const idx={name:headers.indexOf('name'),price:headers.indexOf('price'),sku:headers.indexOf('sku'),category:headers.indexOf('category'),alabar:headers.indexOf('alabarstock'),morocco:headers.indexOf('moroccostock'),reorder:headers.indexOf('reorderlevel')};if(idx.name<0||idx.price<0)throw new Error('Missing required columns: Name and Price.');csvRows=lines.slice(1).map((line,i)=>{const c=parseCsvLine(line);return{name:c[idx.name]||'',price:parseFloat(c[idx.price]||'0'),sku:idx.sku>=0?c[idx.sku]:'',category:idx.category>=0?c[idx.category]:'General',stockAlabar:idx.alabar>=0?parseInt(c[idx.alabar]||'0'):0,stockMorocco:idx.morocco>=0?parseInt(c[idx.morocco]||'0'):0,reorder:idx.reorder>=0?parseInt(c[idx.reorder]||'5'):5,row:i+2};}).filter(r=>r.name);renderCsvPreview();}catch(err){showCsvError(err.message);}};reader.readAsText(file);}
+function parseCsvFile(input){const file=input.files?.[0];if(!file)return;const reader=new FileReader();reader.onload=()=>{try{const text=String(reader.result||'');const lines=text.split(/\r?\n/).filter(l=>l.trim());if(lines.length<2)throw new Error('CSV must include headers and at least one product row.');const headers=parseCsvLine(lines[0]).map(h=>h.toLowerCase().replace(/\s+/g,''));const idx={name:headers.indexOf('name'),price:headers.indexOf('price'),sku:headers.indexOf('sku'),category:headers.indexOf('category'),alabar:headers.indexOf('alabarstock'),morocco:headers.indexOf('moroccostock'),reorder:headers.indexOf('reorderlevel')};if(idx.name<0||idx.price<0)throw new Error('Missing required columns: Name and Price.');const skipped=[];csvRows=lines.slice(1).map((line,i)=>{const c=parseCsvLine(line);return{name:c[idx.name]||'',price:parseFloat(c[idx.price]),sku:idx.sku>=0?c[idx.sku]:'',category:idx.category>=0?c[idx.category]:'General',stockAlabar:idx.alabar>=0?parseInt(c[idx.alabar]||'0'):0,stockMorocco:idx.morocco>=0?parseInt(c[idx.morocco]||'0'):0,reorder:idx.reorder>=0?parseInt(c[idx.reorder]||'5'):5,row:i+2};}).filter(r=>{if(!r.name)return false;if(isNaN(r.price)||r.price<0){skipped.push('row '+r.row+' ('+r.name+')');return false;}return true;});renderCsvPreview();showCsvError(skipped.length?('Skipped '+skipped.length+' row(s) with a missing/invalid price: '+skipped.join(', ')):'');}catch(err){showCsvError(err.message);}};reader.readAsText(file);}
 function renderCsvPreview(){document.getElementById('csv-preview').style.display='block';document.getElementById('csv-import-btn').style.display=csvRows.length?'inline-flex':'none';document.getElementById('csv-preview-title').textContent=csvRows.length+' product(s) ready to import';document.getElementById('csv-preview-body').innerHTML=csvRows.map((r,i)=>'<tr><td>'+escapeHtml(r.name)+'</td><td>'+escapeHtml(r.sku||'—')+'</td><td>'+escapeHtml(r.category||'General')+'</td><td class="mono">'+fmtGHS(r.price||0)+'</td><td class="mono">'+(r.stockAlabar||0)+'</td><td class="mono">'+(r.stockMorocco||0)+'</td><td class="mono">'+(r.reorder||5)+'</td><td><button class="btn btn-danger btn-sm" onclick="removeCsvRow('+i+')">Remove</button></td></tr>').join('');}
 function removeCsvRow(i){csvRows.splice(i,1);renderCsvPreview();}
 async function importCsvProducts(){if(!requireAdmin('import products'))return;if(!csvRows.length)return;if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()){try{const res=await window.LumodaSupabase.importProducts(csvRows.map(r=>({name:r.name,sku:r.sku,category:r.category||'General',price:r.price||0,stock_alabar:r.stockAlabar||0,stock_morocco:r.stockMorocco||0,reorder_level:r.reorder||5})));if(res.error)throw res.error;await syncSupabaseCache();addAudit('CSV Imported',currentUser.fullName+' imported '+csvRows.length+' products [server]');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();return;}catch(err){showCsvError(err.message||'Could not import products to Supabase.');return;}}showCsvError('Supabase is not configured. CSV imports are disabled.');}
@@ -2370,7 +2516,7 @@ initData();
           currentLocation = currentUser.location || 'All';
           currentUser.token = registerSession(currentUser);
           await syncSupabaseCache();
-          showApp();
+          if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }
           return;
         }
       }
