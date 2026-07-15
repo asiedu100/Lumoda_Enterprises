@@ -54,12 +54,25 @@ create table if not exists public.products (
   sku text unique,
   category text not null default 'General',
   price numeric(12,2) not null check (price >= 0),
+  retail_price numeric(12,2) not null default 0 check (retail_price >= 0),
+  wholesale_price numeric(12,2) not null default 0 check (wholesale_price >= 0),
+  carton_price numeric(12,2) not null default 0 check (carton_price >= 0),
   stock_alabar integer not null default 0 check (stock_alabar >= 0),
   stock_morocco integer not null default 0 check (stock_morocco >= 0),
   reorder_level integer not null default 5 check (reorder_level >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.products
+  add column if not exists retail_price numeric(12,2) not null default 0 check (retail_price >= 0),
+  add column if not exists wholesale_price numeric(12,2) not null default 0 check (wholesale_price >= 0),
+  add column if not exists carton_price numeric(12,2) not null default 0 check (carton_price >= 0);
+
+update public.products
+set retail_price = case when retail_price = 0 then price else retail_price end,
+    wholesale_price = case when wholesale_price = 0 then price else wholesale_price end,
+    carton_price = case when carton_price = 0 then price else carton_price end;
 
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(),
@@ -114,10 +127,14 @@ create table if not exists public.invoice_items (
   invoice_id uuid not null references public.invoices(id) on delete cascade,
   product_id uuid references public.products(id),
   name text not null,
+  sale_type text not null default 'retail' check (sale_type in ('retail', 'wholesale', 'carton')),
   qty integer not null check (qty > 0),
   price numeric(12,2) not null check (price >= 0),
   total numeric(12,2) generated always as (qty * price) stored
 );
+
+alter table public.invoice_items
+  add column if not exists sale_type text not null default 'retail' check (sale_type in ('retail', 'wholesale', 'carton'));
 
 create table if not exists public.stock_history (
   id uuid primary key default gen_random_uuid(),
@@ -433,6 +450,8 @@ declare
   v_product public.products%rowtype;
   v_product_id uuid;
   v_qty integer;
+  v_price numeric(12,2);
+  v_sale_type text;
   v_item_total numeric(12,2);
 begin
   if v_user is null then
@@ -603,6 +622,8 @@ declare
   v_product public.products%rowtype;
   v_product_id uuid;
   v_qty integer;
+  v_price numeric(12,2);
+  v_sale_type text;
   v_item_total numeric(12,2);
 begin
   if v_user is null then
@@ -687,27 +708,43 @@ begin
 
   for v_item in select * from jsonb_array_elements(p_items)
   loop
-    v_product_id := (v_item->>'product_id')::uuid;
+    v_product_id := nullif(v_item->>'product_id', '')::uuid;
     v_qty := coalesce((v_item->>'qty')::integer, 0);
+    v_sale_type := coalesce(nullif(v_item->>'sale_type', ''), nullif(v_item->>'priceType', ''), 'retail');
 
     if v_qty < 1 then
       raise exception 'Quantity must be greater than zero';
     end if;
 
+    if v_sale_type not in ('retail', 'wholesale', 'carton') then
+      raise exception 'Invalid sale type';
+    end if;
+
     select *
       into v_product
     from public.products
-    where id = v_product_id;
+    where (v_product_id is not null and id = v_product_id)
+       or (v_product_id is null and lower(name) = lower(trim(coalesce(v_item->>'name', ''))))
+    order by case when v_product_id is not null and id = v_product_id then 0 else 1 end
+    limit 1;
 
     if not found then
       raise exception 'Product not found';
     end if;
 
-    v_item_total := v_product.price * v_qty;
+    v_price := coalesce(nullif(v_item->>'price', '')::numeric,
+      case
+        when v_sale_type = 'wholesale' then nullif(v_product.wholesale_price, 0)
+        when v_sale_type = 'carton' then nullif(v_product.carton_price, 0)
+        else nullif(v_product.retail_price, 0)
+      end,
+      v_product.price);
+
+    v_item_total := v_price * v_qty;
     v_total := v_total + v_item_total;
 
-    insert into public.invoice_items (invoice_id, product_id, name, qty, price)
-    values (v_invoice_id, v_product.id, v_product.name, v_qty, v_product.price);
+    insert into public.invoice_items (invoice_id, product_id, name, sale_type, qty, price)
+    values (v_invoice_id, v_product.id, v_product.name, v_sale_type, v_qty, v_price);
   end loop;
 
   update public.invoices
