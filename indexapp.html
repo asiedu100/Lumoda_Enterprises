@@ -1,0 +1,1124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <link rel="icon" type="image/jpeg" href="/lumo.jpeg">
+<link rel="apple-touch-icon" href="/lumo.jpeg">
+
+<meta property="og:title" content="Lumoda Enterprise">
+<meta property="og:description" content="Inventory, Sales & Warehouse Management System">
+<meta property="og:image" content="https://lumoda.netlify.app/lumo.jpeg">
+<meta property="og:url" content="https://lumoda.netlify.app">
+<meta property="og:type" content="website">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LUMODA ENTERPRISE</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#0a0a0a">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="offline-badge" id="offline-badge">● Offline</div>
+<div class="toast" id="toast"></div>
+<div id="print-area"></div>
+
+<!-- SESSION WARNING -->
+<div id="session-warning" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:900;align-items:center;justify-content:center">
+  <div class="warn-card">
+    <div style="font-size:32px;margin-bottom:10px">⏱</div>
+    <div style="font-size:18px;font-weight:500;margin-bottom:6px">Still there?</div>
+    <div style="font-size:13px;color:var(--gray-600);margin-bottom:12px">You'll be signed out in</div>
+    <div id="session-countdown" style="font-size:52px;font-weight:600;color:var(--brand-red);font-family:var(--font-mono);line-height:1;margin-bottom:12px">60</div>
+    <div style="font-size:12px;color:var(--gray-400);margin-bottom:20px">5 minutes of inactivity</div>
+    <div style="display:flex;gap:10px;justify-content:center">
+      <button class="btn btn-secondary" onclick="doLogout()">Sign Out</button>
+      <button class="btn btn-primary" onclick="stayLoggedIn()">Stay Signed In</button>
+    </div>
+  </div>
+</div>
+
+<!-- AUTH SCREEN -->
+<div id="auth-screen" class="full-screen">
+  <div class="auth-card">
+    <div style="text-align:center;margin-bottom:20px">
+      <svg width="76" height="76" viewBox="0 0 96 96" fill="none">
+        <defs><clipPath id="dc"><rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)"/></clipPath></defs>
+        <rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)" fill="#5C2D0A"/>
+        <polygon points="48,8 80,48 48,48" fill="#F5B800" clip-path="url(#dc)"/>
+        <polygon points="48,8 48,48 16,48" fill="#C8291C" clip-path="url(#dc)"/>
+        <polygon points="48,48 80,48 48,88" fill="#7AB033" clip-path="url(#dc)"/>
+        <polygon points="48,48 48,88 16,48" fill="#4A2208" clip-path="url(#dc)"/>
+      </svg>
+      <div style="font-size:25px;font-weight:700;color:#5C2D0A;letter-spacing:.08em;margin-top:6px">LUMODA ENTERPRISE</div>
+      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:13px;color:#9a9890;margin-top:2px">The cook's helper</div>
+      <div style="font-size:9px;color:#C8291C;font-weight:600;letter-spacing:.1em;margin-top:5px;font-family:'DM Mono',monospace">  MAA LUCY'S PLACE</div>
+    </div>
+    <label class="auth-label">Username</label>
+    <input class="auth-input" id="auth-user" placeholder="Your username" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('auth-pass').focus()">
+    <label class="auth-label">Password</label>
+    <input class="auth-input" id="auth-pass" type="password" placeholder="Your password" onkeydown="if(event.key==='Enter')doLogin()">
+    <label style="display:flex;align-items:center;gap:8px;margin:10px 0 6px;font-size:12px;color:var(--gray-500)"><input id="remember-login" type="checkbox" style="width:14px;height:14px;margin:0"> Keep me signed in on this device</label>
+    <div class="auth-error" id="auth-error"></div>
+    <button class="auth-btn" onclick="doLogin()">Sign In →</button>
+    <div style="text-align:center;margin-top:14px;font-size:10px;color:var(--gray-400);font-family:'DM Mono',monospace;line-height:1.9">TEL: 0244369357 / 0546014044 / 0243563481<br>Alabar &nbsp;|&nbsp; Morocco (K.O)</div>
+    <div style="
+  text-align:center;
+  margin-top:16px;
+  font-size:16px;
+  font-family:'DM Mono', monospace;
+  letter-spacing:.08em;
+  color:#333;
+  font-weight:1000;
+">
+  Powered by MRASYSTEMS
+</div>
+  </div>
+</div>
+
+<!-- CHANGE PASSWORD SCREEN -->
+<div id="change-pw-screen" class="full-screen" style="display:none">
+  <div class="auth-card">
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="width:50px;height:50px;border-radius:50%;background:var(--brand-yellow);display:flex;align-items:center;justify-content:center;font-size:22px;margin:0 auto 12px">🔐</div>
+      <div id="change-pw-name" style="font-size:18px;font-weight:500"></div>
+      <div style="font-size:13px;color:var(--gray-400);margin-top:4px">Set your permanent password to continue</div>
+    </div>
+    <label class="auth-label">New Password</label>
+    <input class="auth-input" id="new-pw" type="password" placeholder="At least 6 characters" onkeydown="if(event.key==='Enter')document.getElementById('confirm-pw').focus()">
+    <label class="auth-label">Confirm Password</label>
+    <input class="auth-input" id="confirm-pw" type="password" placeholder="Repeat password" onkeydown="if(event.key==='Enter')doChangePassword()">
+    <div class="pw-hint" style="margin-top:6px">Minimum 6 characters</div>
+    <div class="auth-error" id="change-pw-error"></div>
+    <button class="auth-btn" onclick="doChangePassword()">Set Password &amp; Enter →</button>
+  </div>
+</div>
+
+<div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+<!-- APP -->
+<div id="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div style="display:flex;align-items:center;gap:10px;padding-bottom:13px">
+        <svg width="32" height="32" viewBox="0 0 34 34" fill="none">
+          <defs><clipPath id="sc"><rect x="5" y="5" width="24" height="24" rx="3" transform="rotate(45 17 17)"/></clipPath></defs>
+          <rect x="5" y="5" width="24" height="24" rx="3" transform="rotate(45 17 17)" fill="rgba(255,255,255,.15)"/>
+          <polygon points="17,2 28,17 17,17" fill="#F5B800" clip-path="url(#sc)"/>
+          <polygon points="17,2 17,17 6,17" fill="#C8291C" clip-path="url(#sc)"/>
+          <polygon points="17,17 28,17 17,32" fill="#7AB033" clip-path="url(#sc)"/>
+          <polygon points="17,17 17,32 6,17" fill="rgba(255,255,255,.2)" clip-path="url(#sc)"/>
+        </svg>
+        <div>
+          <div style="font-size:15px;font-weight:700;color:var(--white);letter-spacing:.06em">LUMODA</div>
+          <div style="font-size:9px;color:rgba(255,255,255,.32);letter-spacing:.08em;font-family:'DM Mono',monospace">ENTERPRISE</div>
+        </div>
+      </div>
+    </div>
+    <div class="loc-badge">
+      <div class="green-dot"></div>
+      <div>
+        <div style="font-size:9px;color:rgba(255,255,255,.32);text-transform:uppercase;letter-spacing:.1em;font-family:'DM Mono',monospace">Branch</div>
+        <div style="font-size:12px;color:var(--white);font-weight:500" id="loc-name">—</div>
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-lbl">Overview</div>
+      <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 1h6v6H1V1zm0 8h6v6H1V9zm8-8h6v6H9V1zm0 8h6v6H9V9z"/></svg>Dashboard
+      </div>
+      <div class="nav-item" data-page="reports" onclick="navigate('reports',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 11h3v4H1v-4zm4-4h3v8H5V7zm4-4h3v12H9V3zm4-2h2v14h-2V1z"/></svg>Reports
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-lbl">Sales</div>
+      <div class="nav-item" data-page="invoices" onclick="navigate('invoices',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v14l-2-1-2 1-2-1-2 1-2-1-2 1V1zm2 2v1h8V3H4zm0 3v1h8V6H4zm0 3v1h5V9H4z"/></svg>Invoices
+      </div>
+      <div class="nav-item" data-page="customers" onclick="navigate('customers',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 7a3 3 0 1 0 0-6A3 3 0 0 0 8 7zm-5 8a5 5 0 0 1 10 0H3z"/></svg>Customers
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-lbl">Inventory</div>
+      <div class="nav-item" data-page="products" onclick="navigate('products',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>Products
+      </div>
+      <div class="nav-item" id="nav-warehouse" data-page="warehouse" onclick="navigate('warehouse',this)">
+  <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M1 3l7-3 7 3v10l-7 3-7-3V3zm2 1.2v7.6l5 2.1V6.3L3 4.2zm10 0l-5 2.1v7.6l5-2.1V4.2z"/>
+  </svg>
+  Warehouse
+</div>
+
+      <div class="nav-item" data-page="stockhistory" onclick="navigate('stockhistory',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2h14v2H1zm1 3h12l-1 9H3L2 5zm4 2v5h1V7H6zm3 0v5h1V7H9z"/></svg>Stock History
+      </div>
+    </div>
+    <div class="nav-section">
+      <div class="nav-lbl">Admin</div>
+      <div class="nav-item" data-page="users" onclick="navigate('users',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>User Management
+      </div>
+      <div class="nav-item" data-page="audit" onclick="navigate('audit',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1H1V2zm0 3h14v9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5zm3 2v1h8V7H4zm0 3v1h5v-1H4z"/></svg>Audit Log
+      </div>
+    </div>
+    <div class="sidebar-footer">
+      <div style="font-size:11px;color:rgba(255,255,255,.32);font-family:'DM Mono',monospace;margin-bottom:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="sidebar-user-info">—</div>
+      <button class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:8px;color:rgba(255,255,255,.6);border-color:rgba(255,255,255,.2);background:transparent;font-size:11px" onclick="openChangeMyPassword()">🔑 Change Password</button>
+      <button class="logout-btn" onclick="doLogout()">← Sign Out</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <button class="mobile-menu" onclick="openSidebar()">☰</button>
+      <div class="page-title" id="page-title">Dashboard</div>
+      <div class="topbar-search"><span style="color:var(--gray-400);font-size:14px">⌕</span><input type="text" placeholder="Search…" id="global-search"></div>
+      <div class="loc-filter" id="loc-filter">
+        <div class="loc-tab active" data-loc="All" onclick="switchLocFilter('All',this)">All</div>
+        <div class="loc-tab" data-loc="Alabar" onclick="switchLocFilter('Alabar',this)">Alabar</div>
+        <div class="loc-tab" data-loc="Morocco" onclick="switchLocFilter('Morocco',this)">Morocco</div>
+      </div>
+      <div class="topbar-user" onclick="openChangeMyPassword()">
+        <div class="user-avatar" id="topbar-avatar">A</div>
+        <div>
+          <div style="font-size:13px;color:var(--black);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="topbar-username">—</div>
+          <div id="topbar-role" class="role-pill" style="background:var(--brand-brown)">admin</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- DASHBOARD -->
+      <div class="page active" id="page-dashboard">
+        <div class="greeting-bar"><h1 id="dash-greeting">Good morning 👋</h1><p id="dash-date"></p></div>
+        <div class="stats-grid">
+          <div class="stat-card"><div class="stat-label">Today's Sales</div><div class="stat-value" id="stat-today">GH₵ 0</div><div class="stat-delta up" id="stat-today-d">0 invoices</div></div>
+          <div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value" id="stat-week">GH₵ 0</div><div class="stat-delta" id="stat-week-d">0 invoices</div></div>
+          <div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value" id="stat-pending">GH₵ 0</div><div class="stat-delta down" id="stat-pending-d">0 outstanding</div></div>
+          <div class="stat-card"><div class="stat-label">Customers</div><div class="stat-value" id="stat-customers">0</div><div class="stat-delta" id="stat-customers-d">in your branch</div></div>
+        </div>
+        <!-- Cash vs MoMo today -->
+        <div id="dash-pm-panel" style="display:none;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <div class="stat-card"><div class="stat-label">💵 Cash Today</div><div class="stat-value" id="stat-cash">GH₵ 0</div></div>
+          <div class="stat-card"><div class="stat-label">📱 MoMo Today</div><div class="stat-value" id="stat-momo">GH₵ 0</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div class="card">
+            <div class="card-header"><div class="card-title">Recent Invoices</div><button class="btn btn-secondary btn-sm" onclick="navigate('invoices',null)">View All</button></div>
+            <table><thead><tr><th>Nr</th><th>Customer</th><th>Amount</th><th>Status</th></tr></thead><tbody id="dash-recent-body"></tbody></table>
+          </div>
+          <div class="card">
+            <div class="card-header"><div class="card-title">Low Stock Alert</div><button class="btn btn-secondary btn-sm" onclick="navigate('products',null)">Manage</button></div>
+            <div id="low-stock-list"></div>
+          </div>
+        </div>
+        <div class="card" id="active-sessions-panel" style="display:none;margin-bottom:12px">
+          <div class="card-header"><div class="card-title">Active Sessions</div><div id="active-sessions-count" style="font-size:12px;color:var(--gray-400);font-family:'DM Mono',monospace"></div></div>
+          <div id="active-sessions-list"></div>
+        </div>
+        <div class="card"><div class="card-header"><div class="card-title">Sales — Last 7 Days</div></div><div style="padding:16px"><div class="chart-bars" id="weekly-chart" style="height:100px"></div></div></div>
+      </div>
+
+      <!-- INVOICES -->
+      <div class="page" id="page-invoices">
+        <div class="card">
+          <div class="card-header">
+            <div class="search-wrap"><input type="text" placeholder="Search invoices…" oninput="filterInvoices(this.value)"></div>
+            <select class="form-select" style="width:120px" onchange="filterInvoiceStatus(this.value)">
+              <option value="">All Status</option><option value="paid">Paid</option><option value="pending">Pending</option><option value="partial">Partial</option>
+            </select>
+            <div style="flex:1"></div>
+            <button class="btn btn-primary" onclick="openInvoiceModal()">+ New Invoice</button>
+            <button class="btn btn-secondary" onclick="openInvoiceModal('cash')">💵 Cash Sale</button>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Customer</th><th>Location</th><th>Items</th><th>Total</th><th>Status</th><th>Payment</th><th>By</th><th></th></tr></thead><tbody id="invoices-body"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- CUSTOMERS -->
+      <div class="page" id="page-customers">
+        <div class="card">
+          <div class="card-header">
+            <div class="search-wrap"><input type="text" placeholder="Search customers…" oninput="filterCustomers(this.value)"></div>
+            <div style="flex:1"></div>
+            <button class="btn btn-primary" onclick="openCustomerModal()">+ Add Customer</button>
+          </div>
+          <table><thead><tr><th>Name</th><th>Phone</th><th>Location</th><th>Invoices</th><th>Total Spent</th><th>Added</th></tr></thead><tbody id="customers-body"></tbody></table>
+        </div>
+      </div>
+
+      <!-- PRODUCTS -->
+      <div class="page" id="page-products">
+        <div class="card">
+          <div class="card-header">
+            <div class="search-wrap"><input type="text" placeholder="Search products…" oninput="filterProducts(this.value)"></div>
+            <div style="flex:1"></div>
+            <button class="btn btn-secondary btn-sm" id="btn-order-stock" onclick="orderStock()" style="display:none">📋 Order Stock</button>
+            <button class="btn btn-secondary btn-sm" id="btn-import-csv" onclick="openCsvModal()" style="display:none">⬆ Import CSV</button>
+            <button class="btn btn-primary" id="btn-add-product" onclick="openProductModal()" style="display:none">+ New Product</button>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Product</th><th>SKU</th><th>Category</th><th>Price</th><th>Alabar Stock</th><th>Morocco Stock</th><th>Status</th><th>Reorder At</th><th></th></tr></thead><tbody id="products-body"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- WAREHOUSE -->
+<div class="page" id="page-warehouse">
+  <div class="card">
+    <div class="card-header">
+      <h2>Warehouse Management</h2>
+      <div style="flex:1"></div>
+      <button class="btn btn-primary" onclick="openWarehouseStockInModal()">
+        + Stock In
+      </button>
+      <button class="btn btn-secondary" onclick="openWarehouseStockOutModal()">
+        Stock Out
+      </button>
+    </div>
+
+    <div id="warehouse-body" style="padding:20px">
+      Warehouse loading...
+    </div>
+  </div>
+</div>
+
+
+      <!-- STOCK HISTORY -->
+      <div class="page" id="page-stockhistory">
+        <div class="card">
+          <div class="card-header">
+            <div class="search-wrap"><input type="text" placeholder="Search stock history…" oninput="filterStockHistory(this.value)"></div>
+            <div style="flex:1"></div>
+            <button class="btn btn-secondary btn-sm" onclick="exportCSV()">Export CSV</button>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Date</th><th>Type</th><th>Product</th><th>Location</th><th>Change</th><th>Note</th><th>By</th></tr></thead><tbody id="stockhistory-body"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- REPORTS -->
+      <div class="page" id="page-reports">
+        <div class="report-grid">
+          <div class="report-card"><h3>Sales Summary</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:9px">Today</div><div class="stat-value" style="font-size:18px" id="rep-today">GH₵ 0</div></div>
+              <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:9px">This Week</div><div class="stat-value" style="font-size:18px" id="rep-week">GH₵ 0</div></div>
+              <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:9px">Last Week</div><div class="stat-value" style="font-size:18px" id="rep-last-week">GH₵ 0</div><div class="stat-delta" id="rep-week-delta" style="font-size:10px;margin-top:4px"></div></div>
+              <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:9px">This Month</div><div class="stat-value" style="font-size:18px" id="rep-month">GH₵ 0</div></div>
+              <div class="stat-card" style="padding:12px"><div class="stat-label" style="font-size:9px">All Time</div><div class="stat-value" style="font-size:18px" id="rep-alltime">GH₵ 0</div></div>
+            </div>
+          </div>
+          <div class="report-card"><h3>Payment Breakdown</h3><div id="payment-breakdown"></div></div>
+        </div>
+        <div class="report-grid">
+          <div class="report-card"><h3>By Location</h3><div id="location-breakdown"></div></div>
+          <div class="report-card"><h3>Top Products</h3><div id="top-products"></div></div>
+        </div>
+        <div class="card"><div class="card-header"><div class="card-title">Monthly Sales — Last 6 Months</div></div><div style="padding:16px"><div class="chart-bars" id="monthly-chart" style="height:140px"></div></div></div>
+      </div>
+
+      <!-- USER MANAGEMENT -->
+      <div class="page" id="page-users">
+        <div class="card" style="margin-bottom:12px">
+          <div class="card-header"><div class="card-title">Live Active Sessions</div><div id="sessions-count-users" style="font-size:12px;color:var(--gray-400);font-family:'DM Mono',monospace"></div><button class="btn btn-secondary btn-sm" onclick="renderUsers()">↻ Refresh</button></div>
+          <div id="sessions-list-users"></div>
+        </div>
+        <div class="card">
+          <div class="card-header"><div class="card-title">Staff Accounts</div><button class="btn btn-primary" onclick="openCreateUserModal()">+ Create Account</button></div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Full Name</th><th>Username</th><th>Role</th><th>Branch</th><th>Status</th><th>Last Login</th><th>Actions</th></tr></thead><tbody id="users-body"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- AUDIT LOG -->
+      <div class="page" id="page-audit">
+        <div class="card">
+          <div class="card-header"><div class="card-title">Audit Trail</div><div class="search-wrap"><input type="text" placeholder="Search logs…" oninput="filterAudit(this.value)"></div></div>
+          <div id="audit-list"></div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- New Invoice -->
+<div class="modal-overlay" id="invoice-modal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="invoice-modal-title">New Invoice</div><button class="modal-close" onclick="closeModal('invoice-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-grid" id="inv-fg-name-phone">
+        <div class="form-group">
+          <label class="form-label">Customer Name *</label>
+          <input class="form-input" id="inv-cust-name" placeholder="Type or select…" oninput="suggestCustomers(this.value)" autocomplete="off">
+          <div id="cust-suggestions" style="border:1px solid var(--gray-100);border-radius:var(--radius);margin-top:2px;display:none;background:var(--white);max-height:130px;overflow-y:auto;position:relative;z-index:10"></div>
+        </div>
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="inv-cust-phone" placeholder="0244123456"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Location *</label><select class="form-select" id="inv-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
+        <div class="form-group" id="inv-fg-status">
+          <label class="form-label">Payment Status</label>
+          <select class="form-select" id="inv-status" onchange="onStatusChange()">
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="partial">Partial</option>
+          </select>
+        </div>
+      </div>
+     <!-- PAYMENT METHOD — shown only when Paid is selected -->
+<div id="payment-method-row" style="display:none;margin-bottom:14px">
+  <label class="form-label">Payment Method *</label>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px">
+    <div class="pm-btn" id="pm-cash" onclick="selectPayMethod('cash')">💵 Cash</div>
+    <div class="pm-btn" id="pm-momo" onclick="selectPayMethod('momo')">📱 Mobile Money</div>
+  </div>
+  <div id="momo-number-row" style="display:none;margin-top:10px">
+  <label class="form-label">MoMo Number (optional)</label>
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+    <input type="checkbox" id="momo-same-as-mine" onchange="toggleMomoSameAsMe(this)">
+    <label for="momo-same-as-mine" style="font-size:13px;cursor:pointer;margin:0">Same number</label>
+  </div>
+   <input class="form-input" id="inv-momo-number" placeholder="e.g. 0244123456">
+</div>
+</div>
+<div class="form-group" id="inv-fg-address">
+  <label class="form-label">Address</label>
+  <input class="form-input" id="inv-cust-addr" placeholder="Optional">
+</div>
+
+<!-- CUSTOMER TYPE SELECTOR -->
+<div class="form-group" style="margin-bottom:14px">
+  <label class="form-label">Customer Type *</label>
+  <div style="display:flex;gap:8px;margin-top:6px">
+    <div id="ctype-retail" onclick="selectCustomerType('retail')"
+      style="flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)">
+      🏪 Retail
+    </div>
+    <div id="ctype-wholesale" onclick="selectCustomerType('wholesale')"
+      style="flex:1;padding:9px;border:2px solid var(--brand-brown);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--brand-brown)">
+      📦 Wholesale
+    </div>
+    <div id="ctype-carton" onclick="selectCustomerType('carton')"
+      style="flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)">
+      🗃️ Carton
+    </div>
+  </div>
+  <div style="font-size:11px;color:var(--gray-400);margin-top:5px;font-family:var(--font-mono)">
+    Selecting a type prices ALL items automatically
+  </div>
+</div>
+
+<label class="form-label">Line Items *</label>
+<div class="line-items-wrap">
+  <div class="li-header">
+    <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+  </div>
+  <div id="line-items-body"></div>
+</div>
+
+<button class="btn btn-secondary btn-sm" onclick="addLineItem()" style="margin-bottom:12px">+ Add Item</button>
+
+<div class="form-group" style="margin-bottom:12px">
+  <label class="form-label">Discount (GH₵)</label>
+  <input class="form-input" id="inv-discount" type="number" min="0" value="0" placeholder="0.00" oninput="calcTotal()">
+</div>
+
+<div class="inv-total" id="invoice-total-display">Total: GH₵ 0.00</div>
+
+<div class="form-group" style="margin-top:10px">
+  <label class="form-label">Notes</label>
+  <textarea class="form-textarea" id="inv-notes" placeholder="Optional…"></textarea>
+</div>
+
+</div>
+
+<div class="modal-footer">
+  <button class="btn btn-secondary" onclick="closeModal('invoice-modal')">Cancel</button>
+  <div class="modal-footer-right">
+    <button class="btn btn-primary" id="invoice-submit-btn" onclick="createInvoice()">Create Invoice</button>
+  </div>
+</div>
+
+</div>
+</div>
+
+
+<!-- View Invoice -->
+<div class="modal-overlay" id="view-invoice-modal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="view-inv-title">Invoice</div><button class="modal-close" onclick="closeModal('view-invoice-modal')">×</button></div>
+    <div class="modal-body" id="view-inv-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-danger btn-sm" id="view-inv-delete" style="display:none">Delete Invoice</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-secondary" onclick="copyInvoiceText()"> Copy</button>
+        <button class="btn btn-secondary" id="view-inv-share" onclick="shareInvoice()"> Share</button>
+        <button class="btn btn-secondary" id="view-inv-mark-paid" style="display:none" onclick="markViewingInvoicePaid()">Mark Paid</button>
+        <button class="btn btn-secondary" onclick="printInvoice()"> Print</button>
+        <button class="btn btn-secondary" id="view-inv-edit" onclick="openEditInvoiceModal(viewingInvoiceId)">Edit Invoice</button>
+        <button class="btn btn-primary" onclick="closeModal('view-invoice-modal')">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="edit-invoice-modal">
+
+  <div class="modal">
+
+    <div class="modal-header">
+      <div class="modal-title">Edit Invoice</div>
+      <button class="modal-close" onclick="closeModal('edit-invoice-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Customer Name</label><input id="edit-customer-name" placeholder="Customer Name" class="form-input"></div>
+        <div class="form-group"><label class="form-label">Phone</label><input id="edit-phone" placeholder="Phone" class="form-input"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Address</label><input id="edit-address" placeholder="Address" class="form-input"></div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Payment Status</label>
+          <select id="edit-status" class="form-select">
+            <option value="pending">Pending</option>
+            <option value="paid">Paid</option>
+            <option value="partial">Partial</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Payment Method</label>
+          <select id="edit-pay-method" class="form-select">
+            <option value="">None</option>
+            <option value="cash">Cash</option>
+            <option value="momo">Mobile Money</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="form-label">Line Items</label>
+      <div class="line-items-wrap">
+        <div class="li-header">
+          <span>Product</span><span>Sale Type</span><span>Qty</span><span>Unit Price (GH₵)</span><span></span>
+        </div>
+        <div id="edit-items-container"></div>
+      </div>
+      <textarea id="edit-notes" placeholder="Notes" class="form-textarea"></textarea>
+
+      <button class="btn btn-secondary btn-sm" onclick="addItem()">
+        + Add Product
+      </button>
+      <div class="inv-total" id="edit-invoice-total-display">Total: GH₵ 0.00</div>
+
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-invoice-modal')">
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveEditedInvoice()">
+          Save Changes
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Product Modal -->
+<div class="modal-overlay" id="product-modal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title" id="prod-modal-title">New Product</div><button class="modal-close" onclick="closeModal('product-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Product Name *</label><input class="form-input" id="prod-name" placeholder="e.g. Blender"></div>
+        <div class="form-group"><label class="form-label">SKU</label><input class="form-input" id="prod-sku" placeholder="e.g. BLN-001"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Category</label><input class="form-input" id="prod-category" placeholder="e.g. Appliances"></div>
+        <div class="form-group"><label class="form-label">Retail Price (GH₵) *</label><input class="form-input" type="number" id="prod-price" placeholder="0.00"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Wholesale Price (GH₵)</label><input class="form-input" type="number" id="prod-wholesale-price" placeholder="0.00"></div>
+        <div class="form-group"><label class="form-label">Carton Price (GH₵)</label><input class="form-input" type="number" id="prod-carton-price" placeholder="0.00"></div>
+      </div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Alabar Stock</label><input class="form-input" type="number" id="prod-stock-alabar" placeholder="0"></div>
+        <div class="form-group"><label class="form-label">Morocco Stock</label><input class="form-input" type="number" id="prod-stock-morocco" placeholder="0"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Reorder Level</label><input class="form-input" type="number" id="prod-reorder" placeholder="5"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('product-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" onclick="saveProduct()">Save Product</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Customer Modal -->
+<div class="modal-overlay" id="customer-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">Add Customer</div><button class="modal-close" onclick="closeModal('customer-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Full Name *</label><input class="form-input" id="cust-name" placeholder="John Doe"></div>
+        <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="cust-phone" placeholder="0244123456"></div>
+      </div>
+      <div class="form-group"><label class="form-label">Location *</label><select class="form-select" id="cust-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
+      <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="cust-address" placeholder="Optional"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('customer-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" onclick="saveCustomer()">Save</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Stock Adjust Modal -->
+<div class="modal-overlay" id="stock-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">Adjust Stock</div><button class="modal-close" onclick="closeModal('stock-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Product</label><input class="form-input" id="stock-prod-name" readonly></div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Location</label><select class="form-select" id="stock-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
+        <div class="form-group"><label class="form-label">Type</label><select class="form-select" id="stock-type"><option value="Purchase">Purchase (Add)</option><option value="Return">Return (Add)</option><option value="Damage">Damage (Remove)</option><option value="Correction">Correction</option></select></div>
+      </div>
+      <div class="form-group"><label class="form-label">Quantity</label><input class="form-input" type="number" id="stock-qty" placeholder="e.g. 10"></div>
+      <div class="form-group"><label class="form-label">Reason</label><input class="form-input" id="stock-note" placeholder="e.g. Supplier delivery"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('stock-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" onclick="applyStockAdjustment()">Apply</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Create User Modal -->
+<div class="modal-overlay" id="create-user-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">Create Staff Account</div><button class="modal-close" onclick="closeModal('create-user-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">Full Name *</label><input class="form-input" id="new-user-fullname" placeholder="e.g. John Agyei"></div>
+      <div class="form-group"><label class="form-label">Username *</label><input class="form-input" id="new-user-username" placeholder="e.g. john_agyei" oninput="this.value=this.value.toLowerCase().replace(/[^a-z0-9_]/g,'')"><div class="pw-hint" style="margin-top:4px">Letters, numbers, underscore only.</div></div>
+      <div class="form-group"><label class="form-label">Email *</label><input class="form-input" type="email" id="new-user-email" placeholder="e.g. john@example.com" autocomplete="email"></div>
+      <div class="form-grid">
+        <div class="form-group"><label class="form-label">Role</label><select class="form-select" id="new-user-role" onchange="onNewUserRoleChange()"><option value="staff">Staff</option><option value="warehouse_manager">Warehouse Manager</option><option value="admin">Admin</option></select></div>
+        <div class="form-group" id="new-user-location-row"><label class="form-label">Branch *</label><select class="form-select" id="new-user-location"><option value="Alabar">Alabar</option><option value="Morocco">Morocco</option></select></div>
+      </div>
+      <div class="form-error" id="create-user-error"></div>
+      <div style="background:#fef9c3;border:1px solid #fde047;border-radius:var(--radius);padding:9px 12px;font-size:12px;color:#854d0e;margin-top:4px">A temporary password will be auto-generated. Staff must change it on first login.</div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('create-user-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" onclick="saveNewUser()">Create Account</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Temp Password Modal -->
+<div class="modal-overlay" id="temp-pw-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">✅ Account Created</div><button class="modal-close" onclick="closeModal('temp-pw-modal')">×</button></div>
+    <div class="modal-body"><div id="temp-pw-display"></div></div>
+    <div class="modal-footer"><div class="modal-footer-right"><button class="btn btn-secondary" onclick="copyTempPw()">📋 Copy Password</button><button class="btn btn-primary" onclick="closeModal('temp-pw-modal')">Done</button></div></div>
+  </div>
+</div>
+
+<!-- Change My Password -->
+<div class="modal-overlay" id="my-password-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header"><div class="modal-title">Change My Password</div><button class="modal-close" onclick="closeModal('my-password-modal')">×</button></div>
+    <div class="modal-body">
+      <div class="form-group"><label class="form-label">New Password</label><input class="form-input" id="my-new-pw" type="password" placeholder="At least 6 characters"></div>
+      <div class="form-group"><label class="form-label">Confirm Password</label><input class="form-input" id="my-confirm-pw" type="password" placeholder="Repeat password"></div>
+      <div class="form-error" id="my-pw-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('my-password-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" onclick="saveMyPassword()">Update Password</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- CSV Import Modal -->
+<div class="modal-overlay" id="csv-modal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">Import Products from CSV</div><button class="modal-close" onclick="closeModal('csv-modal')">×</button></div>
+    <div class="modal-body">
+      <div style="background:var(--gray-50);border:2px dashed var(--gray-200);border-radius:var(--radius);padding:24px;text-align:center;margin-bottom:16px">
+        <div style="font-size:24px;margin-bottom:8px">📂</div>
+        <div style="font-size:13px;color:var(--gray-600);margin-bottom:12px">Select a CSV file to import products</div>
+        <input type="file" id="csv-file-input" accept=".csv" onchange="parseCsvFile(this)" style="font-size:13px;font-family:var(--font-sans)">
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div style="font-size:12px;color:var(--gray-400)">Required columns: <code style="background:var(--gray-50);padding:2px 6px;border-radius:3px">Name, Price</code> &nbsp; Optional: <code style="background:var(--gray-50);padding:2px 6px;border-radius:3px">SKU, Category, AlabarStock, MoroccoStock, ReorderLevel</code></div>
+        <button class="btn btn-secondary btn-sm" onclick="downloadCsvTemplate()">⬇ Template</button>
+      </div>
+      <div id="csv-preview" style="display:none">
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--brand-brown)" id="csv-preview-title"></div>
+        <div style="overflow-x:auto;max-height:260px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+          <table><thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Price</th><th>Alabar</th><th>Morocco</th><th>Reorder</th><th>Action</th></tr></thead><tbody id="csv-preview-body"></tbody></table>
+        </div>
+      </div>
+      <div class="form-error" id="csv-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('csv-modal')">Cancel</button>
+      <div class="modal-footer-right"><button class="btn btn-primary" id="csv-import-btn" onclick="importCsvProducts()" style="display:none">Import Products</button></div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse Opening Balance Modal -->
+<div class="modal-overlay" id="warehouse-opening-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Opening Balance</div>
+      <button class="modal-close" onclick="closeModal('warehouse-opening-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Description of Goods *</label>
+        <input class="form-input" id="wh-ob-description" placeholder="e.g. Blender cartons">
+      </div>
+
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">Item Code</label>
+          <input class="form-input" id="wh-ob-code" placeholder="Optional">
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Opening Cartons *</label>
+          <input class="form-input" type="number" id="wh-ob-cartons" min="1" placeholder="0">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="wh-ob-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-opening-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseOpeningBalance()">Save Opening Balance</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse Stock In Modal -->
+<div class="modal-overlay" id="warehouse-stockin-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Stock In</div>
+      <button class="modal-close" onclick="closeModal('warehouse-stockin-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Supplier Name *</label>
+        <input class="form-input" id="wh-in-supplier" placeholder="e.g. Adom Trading">
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
+        <label class="form-label" style="margin:0">Items Received *</label>
+        <button class="btn btn-secondary btn-sm" onclick="_addStockInRow()">+ Add Item</button>
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+        <table style="margin:0">
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description of Goods</th>
+              <th>Cartons</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="wh-stockin-rows-container"></tbody>
+        </table>
+      </div>
+      <div class="form-group" style="margin-top:14px">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="wh-in-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-stockin-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseStockIn()">Save Stock In</button>
+      </div>
+    </div>
+  </div>
+</div>
+<datalist id="warehouse-stockin-items"></datalist>
+
+<div class="modal-overlay" id="warehouse-adjustment-modal">
+  <div class="modal modal-md">
+
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Adjustment</div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-adjustment-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body">
+
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label">Item *</label>
+
+          <input
+            class="form-input"
+            list="warehouse-adjustment-items"
+            id="wh-adjust-item"
+            placeholder="Type item name">
+
+          <datalist id="warehouse-adjustment-items">
+          </datalist>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Adjustment Type *</label>
+
+          <select
+            class="form-select"
+            id="wh-adjust-type">
+
+            <option value="add">Add Stock</option>
+            <option value="remove">Remove Stock</option>
+
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Cartons *</label>
+
+          <input
+            class="form-input"
+            type="number"
+            min="1"
+            id="wh-adjust-cartons"
+            placeholder="0">
+        </div>
+
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Reason *</label>
+
+        <textarea
+          class="form-textarea"
+          id="wh-adjust-reason"
+          placeholder="Explain why adjustment is being made"></textarea>
+      </div>
+
+    </div>
+
+    <div class="modal-footer">
+
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-adjustment-modal')">
+
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+
+        <button
+          class="btn btn-warning"
+          onclick="saveWarehouseAdjustment()">
+
+          Save Adjustment
+        </button>
+
+      </div>
+
+    </div>
+
+  </div>
+</div>
+
+<!-- Warehouse Stock Out / Requisition Modal -->
+<div class="modal-overlay" id="warehouse-stockout-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">
+        Warehouse Stock Out / Requisition
+      </div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-stockout-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body">
+
+      <!-- Top Form -->
+      <div class="form-grid">
+
+        <div class="form-group">
+          <label class="form-label">Issue To *</label>
+
+          <select class="form-select" id="wh-out-issue-to">
+            <option value="Alabar">Alabar Branch</option>
+            <option value="Morocco">Morocco Branch</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Storekeeper *</label>
+
+          <input
+            class="form-input"
+            id="wh-out-storekeeper"
+            placeholder="Storekeeper name"
+            readonly>
+        </div>
+
+      </div>
+      <!-- END form-grid -->
+
+      <!-- Notes -->
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+
+        <textarea
+          class="form-textarea"
+          id="wh-out-notes"
+          placeholder="Optional notes"></textarea>
+      </div>
+
+      <!-- Requisition Header -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
+
+        <label class="form-label" style="margin:0">
+          Requisition Items *
+        </label>
+
+        <button
+          class="btn btn-secondary btn-sm"
+          onclick="addWarehouseRequisitionRow()">
+          + Add Item
+        </button>
+      </div>
+
+      <!-- Requisition Table -->
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+
+        <table style="margin:0">
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description of Goods</th>
+              <th>Cartons Supplied</th>
+              <th></th>
+            </tr>
+          </thead>
+
+          <tbody id="warehouse-requisition-items-body"></tbody>
+        </table>
+      </div>
+
+    </div>
+
+    <div class="modal-footer">
+
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-stockout-modal')">
+        Cancel
+      </button>
+
+      <div class="modal-footer-right">
+        <button
+          class="btn btn-primary"
+          onclick="saveWarehouseStockOut()">
+          Save Requisition
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+
+<!-- Warehouse Product Modal -->
+<div class="modal-overlay" id="warehouse-product-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Add Warehouse Product</div>
+      <button class="modal-close" onclick="closeModal('warehouse-product-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Item Code</label>
+        <input class="form-input" id="wh-prod-code" placeholder="e.g. BL001">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Description / Product Name *</label>
+        <input class="form-input" id="wh-prod-name" placeholder="e.g. Blender">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Category</label>
+        <input class="form-input" id="wh-prod-category" placeholder="e.g. Appliances">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Reorder Level</label>
+        <input class="form-input" type="number" id="wh-prod-reorder" placeholder="e.g. 10">
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-product-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseProduct()">Save Product</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Supplier Modal -->
+<div class="modal-overlay" id="supplier-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Add Supplier</div>
+      <button class="modal-close" onclick="closeModal('supplier-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Supplier Name *</label>
+        <input class="form-input" id="supplier-name" placeholder="e.g. Adom Trading">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Phone</label>
+        <input class="form-input" id="supplier-phone" placeholder="0244123456">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Location</label>
+        <input class="form-input" id="supplier-location" placeholder="e.g. Kumasi">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="supplier-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('supplier-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveSupplier()">Save Supplier</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse CSV Import Modal -->
+<div class="modal-overlay" id="warehouse-csv-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title">Import Warehouse CSV</div>
+      <button class="modal-close" onclick="closeModal('warehouse-csv-modal')">×</button>
+    </div>
+
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">CSV File *</label>
+        <input class="form-input" type="file" id="warehouse-csv-file" accept=".csv">
+      </div>
+
+      <div class="pw-hint">
+        Required columns: item_code, item_name, cartons, reorder_level, unit_price
+      </div>
+
+      <pre style="margin-top:12px;background:var(--gray-50);padding:10px;border-radius:var(--radius);font-size:11px;overflow:auto">item_code,item_name,cartons,reorder_level,unit_price
+BL001,Blender,50,10,120
+KT001,Kettle,30,10,85</pre>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-csv-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="importWarehouseCsv()">Import CSV</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+  </div>
+</div>
+<!-- Warehouse View Movement Modal -->
+<div class="modal-overlay" id="warehouse-view-modal">
+  <div class="modal" style="max-width:900px">
+
+    <div class="modal-header">
+      <div class="modal-title" id="warehouse-view-title">
+        Warehouse Movement
+      </div>
+
+      <button
+        class="modal-close"
+        onclick="closeModal('warehouse-view-modal')">
+        ×
+      </button>
+    </div>
+
+    <div class="modal-body" id="warehouse-view-body"></div>
+
+    <div class="modal-footer">
+      <button
+        class="btn btn-secondary"
+        onclick="closeModal('warehouse-view-modal')">
+        Close
+      </button>
+
+      <div class="modal-footer-right">
+        <button
+          class="btn btn-primary"
+          onclick="printWarehouseReq()">
+          Print
+        </button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<datalist id="product-list"></datalist>
+
+<script src="supabase-config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="supabase-client.js"></script>
+<script src="app.js"></script>
+<script src="warehouse.js"></script>
+</body>
+</html>
