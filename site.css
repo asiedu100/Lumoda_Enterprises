@@ -76,6 +76,22 @@ img,svg{display:block;max-width:100%}
 .gallery-tile-split:hover img{transform:scale(1.08)}
 .gallery-tile-count{position:absolute;top:12px;right:12px;background:rgba(10,10,10,.55);color:var(--white);font-size:10.5px;font-weight:600;letter-spacing:.03em;padding:4px 9px;border-radius:999px;backdrop-filter:blur(2px)}
 
+/* ---------- products ---------- */
+.products{padding:12px 0 56px}
+.product-tile{aspect-ratio:4/5;background:var(--gray-800)}
+.product-tile img{filter:brightness(.94)}
+.product-badge{position:absolute;top:12px;right:12px;background:var(--brand-yellow);color:var(--brand-brown-dark);font-size:9.5px;font-weight:700;letter-spacing:.07em;padding:5px 11px;border-radius:999px;text-transform:uppercase}
+.product-info{position:absolute;left:0;right:0;bottom:0;padding:24px 18px 16px;background:linear-gradient(0deg,rgba(8,5,2,.92) 0%,rgba(8,5,2,.65) 48%,rgba(8,5,2,0) 100%)}
+.product-name{display:block;font-family:var(--font-serif);font-style:italic;font-size:21px;font-weight:400;color:var(--white);letter-spacing:.01em}
+.product-price{display:block;font-family:var(--font-mono);font-size:19px;font-weight:700;color:var(--brand-yellow);margin-top:6px}
+.product-note{display:block;font-size:10.5px;color:rgba(250,250,250,.72);margin-top:8px;line-height:1.4}
+.product-note a{color:var(--white);font-weight:600;text-decoration:underline}
+
+/* ---------- promotions banner ---------- */
+.promo-banner{background:var(--brand-red);color:var(--white)}
+.promo-banner-inner{display:flex;align-items:center;justify-content:center;gap:10px;padding:10px 24px;text-align:center;font-size:13px;font-weight:600}
+.promo-banner-icon{font-size:15px}
+
 /* ---------- lightbox ---------- */
 .lightbox{position:fixed;inset:0;z-index:200;background:rgba(10,6,3,.92);display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0;visibility:hidden;transition:opacity .25s ease;padding:24px}
 .lightbox.open{opacity:1;visibility:visible}
@@ -113,6 +129,8 @@ img,svg{display:block;max-width:100%}
 .loc-pin{width:28px;height:28px;border-radius:50%;background:var(--brand-brown);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px}
 .loc-item h5{font-size:14px;font-weight:700;color:var(--brand-brown);margin-bottom:3px}
 .loc-item p{font-size:13px;color:var(--gray-600)}
+.map-embed{margin-top:10px;border-radius:var(--radius);overflow:hidden;aspect-ratio:16/10}
+.map-embed iframe{width:100%;height:100%;border:0;display:block}
 
 /* ---------- footer ---------- */
 .site-footer{background:var(--brand-brown);color:var(--white);padding:34px 0 26px}

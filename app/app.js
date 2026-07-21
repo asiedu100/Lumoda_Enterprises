@@ -123,8 +123,9 @@ function initData() {
 }
 
 function getUsers()        { return LS.get('lumoda_users') || []; }
-function getInvoices()     { return (LS.get('lumoda_invoices') || []).filter(i => !i.deleted); }
+function getInvoices()     { return (LS.get('lumoda_invoices') || []).filter(i => !i.deleted && !i.isCashSale); }
 function getAllInvoices()   { return LS.get('lumoda_invoices') || []; }
+function getCashSales()     { return (LS.get('lumoda_invoices') || []).filter(i => !i.deleted && i.isCashSale); }
 function getCustomers()    { return LS.get('lumoda_customers') || []; }
 function getProducts()     { return normalizeProducts(LS.get('lumoda_products') || []); }
 function getStockHistory() { return LS.get('lumoda_stockhistory') || []; }
@@ -341,6 +342,7 @@ async function doLogin() {
       currentLocation = currentUser.location;
       currentUser.token = registerSession(currentUser);
       setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
+      try { await window.LumodaSupabase.recordLogin(); } catch (e) { console.warn('Could not record last login:', e); }
       await syncSupabaseCache();
       addAudit('Login', `"${currentUser.fullName}" signed in with Supabase [${currentUser.location}]`);
       if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }
@@ -455,7 +457,7 @@ function buildNavForRole() {
   const warehouseManager = currentUser && currentUser.role === 'warehouse_manager';
 
   if (warehouseManager) {
-    ['dashboard','invoices','customers','products','stockhistory','reports','audit','users'].forEach(page => {
+    ['dashboard','cashsales','invoices','customers','products','stockhistory','reports','audit','users','approvals'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'none';
     });
@@ -464,23 +466,24 @@ function buildNavForRole() {
     document.getElementById('loc-filter').style.display = 'none';
     currentLocation = currentUser.location;
   } else if (admin) {
-    ['reports','audit','users'].forEach(page => {
+    ['reports','audit','users','approvals'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'flex';
     });
-    ['dashboard','invoices','customers','products','stockhistory'].forEach(page => {
+    ['dashboard','cashsales','invoices','customers','products','stockhistory'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'flex';
     });
     const warehouseNav = document.getElementById('nav-warehouse');
     if (warehouseNav) warehouseNav.style.display = 'flex';
     document.getElementById('loc-filter').style.display = 'flex';
+    refreshApprovalsBadge();
   } else {
-    ['reports','audit','users','warehouse'].forEach(page => {
+    ['reports','audit','users','warehouse','approvals'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'none';
     });
-    ['dashboard','invoices','customers','products','stockhistory'].forEach(page => {
+    ['dashboard','cashsales','invoices','customers','products','stockhistory'].forEach(page => {
       const el = document.querySelector('.nav-item[data-page="' + page + '"]');
       if (el) el.style.display = 'flex';
     });
@@ -524,7 +527,7 @@ function updateUserUI() {
 // NAVIGATION
 // ============================================================
 function navigate(page, el) {
-  if (!isAdmin() && ['reports','audit','users'].includes(page)) { toast('Access denied', 'error'); return; }
+  if (!isAdmin() && ['reports','audit','users','approvals'].includes(page)) { toast('Access denied', 'error'); return; }
   if (currentUser && currentUser.role === 'warehouse_manager' && page !== 'warehouse' && page !== 'settings') { toast('Access denied', 'error'); return; }
   // Warehouse is only for admins and warehouse managers — nav hides it for everyone
   // else, but that alone doesn't stop navigate('warehouse') being called directly.
@@ -536,7 +539,7 @@ function navigate(page, el) {
   pageEl.classList.add('active');
   if (el) el.classList.add('active');
   else document.querySelector('.nav-item[data-page="' + page + '"]')?.classList.add('active');
-  const titles = { dashboard:'Dashboard', invoices:'Invoices', customers:'Customers', products:'Products', warehouse:'Warehouse', stockhistory:'Stock History', reports:'Reports', audit:'Audit Log', users:'User Management' };
+  const titles = { dashboard:'Dashboard', cashsales:'Cash Sales', invoices:'Invoices', customers:'Customers', products:'Products', warehouse:'Warehouse', stockhistory:'Stock History', reports:'Reports', audit:'Audit Log', users:'User Management', approvals:'Pending Approvals' };
   document.getElementById('page-title').textContent = titles[page] || page;
   renderPage(page);
 }
@@ -544,6 +547,7 @@ function navigate(page, el) {
 function renderPage(page) {
   ({
     dashboard: renderDashboard,
+    cashsales: renderCashSales,
     invoices: renderInvoices,
     customers: renderCustomers,
     products: renderProducts,
@@ -551,7 +555,8 @@ function renderPage(page) {
     stockhistory: renderStockHistory,
     reports: renderReports,
     audit: renderAuditLog,
-    users: renderUsers
+    users: renderUsers,
+    approvals: renderApprovals
   })[page]?.();
 }
 
@@ -753,23 +758,35 @@ function _updateCustomerTypePills(type) {
 function renderDashboard() {
   updateUserUI();
   const invoices   = filterByLoc(getInvoices());
+  // Sales-total tiles show branch-wide numbers to admins, but only the
+  // logged-in staff member's own sales to everyone else — the day's
+  // revenue figures are business-sensitive and staff don't need the
+  // whole branch's numbers to do their job.
+  const own = isAdmin() ? invoices : invoices.filter(i => i.createdBy === currentUser.id);
   const now        = new Date();
   const today      = startOfLocalDay(now);
   const weekStart  = startOfWeek(now);
   const nextWeek   = new Date(weekStart); nextWeek.setDate(nextWeek.getDate() + 7);
   const prevWeek   = new Date(weekStart); prevWeek.setDate(prevWeek.getDate() - 7);
-  const todayInvs  = invoices.filter(i => asTimestamp(i.createdAt) >= today);
-  const weekInvs   = invoices.filter(i => {
+  const todayInvs  = own.filter(i => asTimestamp(i.createdAt) >= today);
+  const weekInvs   = own.filter(i => {
     const createdAt = asTimestamp(i.createdAt);
     return createdAt >= weekStart && createdAt < nextWeek;
   });
-  const lastWeekInvs = invoices.filter(i => {
+  const lastWeekInvs = own.filter(i => {
     const createdAt = asTimestamp(i.createdAt);
     return createdAt >= prevWeek && createdAt < weekStart;
   });
-  const pendingInvs = invoices.filter(i => i.status==='pending'||i.status==='partial');
+  const pendingInvs = own.filter(i => i.status==='pending'||i.status==='partial');
   const weekTotal = sumInvoiceTotal(weekInvs);
   const lastWeekTotal = sumInvoiceTotal(lastWeekInvs);
+
+  const todayLabelEl   = document.getElementById('stat-today-label');
+  const weekLabelEl    = document.getElementById('stat-week-label');
+  const pendingLabelEl = document.getElementById('stat-pending-label');
+  if (todayLabelEl)   todayLabelEl.textContent   = isAdmin() ? "Today's Sales"   : 'Your Sales Today';
+  if (weekLabelEl)    weekLabelEl.textContent    = isAdmin() ? 'This Week'       : 'Your Sales This Week';
+  if (pendingLabelEl) pendingLabelEl.textContent = isAdmin() ? 'Pending'         : 'Your Pending';
 
   document.getElementById('stat-today').textContent     = fmtGHS(sumInvoiceTotal(todayInvs));
   document.getElementById('stat-today-d').textContent   = todayInvs.length + ' invoice' + (todayInvs.length!==1?'s':'');
@@ -779,7 +796,7 @@ function renderDashboard() {
   document.getElementById('stat-pending-d').textContent = pendingInvs.length + ' outstanding';
   document.getElementById('stat-customers').textContent = filterByLoc(getCustomers()).length;
 
-  const recent = [...invoices].sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt)).slice(0,6);
+  const recent = [...own].sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt)).slice(0,6);
   document.getElementById('dash-recent-body').innerHTML = recent.length === 0
     ? '<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:32px">No invoices yet</td></tr>'
     : recent.map(i => '<tr style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')"><td class="mono">'+escapeHtml(i.number)+'</td><td>'+escapeHtml(i.customerName)+'</td><td class="mono">'+fmtGHS(i.total)+'</td><td>'+statusBadge(i.status)+'</td></tr>').join('');
@@ -805,12 +822,16 @@ function renderDashboard() {
     pmPanel.style.display = hasPaid ? 'grid' : 'none';
     const cashEl = document.getElementById('stat-cash');
     const momoEl = document.getElementById('stat-momo');
+    const cashLabelEl = document.getElementById('stat-cash-label');
+    const momoLabelEl = document.getElementById('stat-momo-label');
     if (cashEl) cashEl.textContent = fmtGHS(todayCash);
     if (momoEl) momoEl.textContent = fmtGHS(todayMomo);
+    if (cashLabelEl) cashLabelEl.textContent = isAdmin() ? '💵 Cash Today' : '💵 Your Cash Today';
+    if (momoLabelEl) momoLabelEl.textContent = isAdmin() ? '📱 MoMo Today' : '📱 Your MoMo Today';
   }
 
   renderSessionsPanel();
-  renderWeeklyChart(invoices);
+  renderWeeklyChart(own);
 }
 
 function renderWeeklyChart(invoices) {
@@ -838,6 +859,7 @@ let invoiceFilter = { text:'', status:'' };
 
 function renderInvoices() {
   let invoices = filterByLoc(getInvoices());
+  if (!isAdmin()) invoices = invoices.filter(i => i.createdBy === currentUser.id);
   if (invoiceFilter.text) { const q=invoiceFilter.text.toLowerCase(); invoices=invoices.filter(i=>i.customerName.toLowerCase().includes(q)||i.number.toLowerCase().includes(q)); }
   if (invoiceFilter.status) invoices = invoices.filter(i=>i.status===invoiceFilter.status);
   invoices.sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt));
@@ -848,6 +870,21 @@ function renderInvoices() {
 }
 function filterInvoices(val)      { invoiceFilter.text=val;   renderInvoices(); }
 function filterInvoiceStatus(val) { invoiceFilter.status=val; renderInvoices(); }
+
+let cashSalesFilter = '';
+function filterCashSales(val) { cashSalesFilter = val; renderCashSales(); }
+
+function renderCashSales() {
+  let sales = filterByLoc(getCashSales());
+  if (!isAdmin()) sales = sales.filter(i => i.createdBy === currentUser.id);
+  if (cashSalesFilter) { const q=cashSalesFilter.toLowerCase(); sales=sales.filter(i=>i.customerName.toLowerCase().includes(q)||i.number.toLowerCase().includes(q)); }
+  sales.sort((a,b)=>asTimestamp(b.createdAt)-asTimestamp(a.createdAt));
+  const tbody = document.getElementById('cashsales-body');
+  if (!tbody) return;
+  tbody.innerHTML = sales.length===0
+    ? '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No cash sales yet</td></tr>'
+    : sales.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+escapeHtml(i.number)+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td><span class="badge badge-neutral">'+escapeHtml(i.location)+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td style="color:var(--gray-400);font-size:12px">'+escapeHtml(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
+}
 
 function _walkInName() {
   const now = new Date();
@@ -867,6 +904,10 @@ function openInvoiceModal(mode) {
   document.getElementById('invoice-total-display').textContent = 'Total: GH₵ 0.00';
   const discEl = document.getElementById('inv-discount');
   if (discEl) discEl.value = 0;
+  const tenderedEl = document.getElementById('inv-cash-tendered');
+  if (tenderedEl) tenderedEl.value = '';
+  const changeEl = document.getElementById('inv-change-display');
+  if (changeEl) changeEl.textContent = '';
   const _pmRow   = document.getElementById('payment-method-row');
   const _momoRow = document.getElementById('momo-number-row');
   const _pmCash  = document.getElementById('pm-cash');
@@ -884,11 +925,13 @@ function openInvoiceModal(mode) {
   const namePhone = document.getElementById('inv-fg-name-phone');
   const addr      = document.getElementById('inv-fg-address');
   const statusFg  = document.getElementById('inv-fg-status');
+  const tenderedFg = document.getElementById('inv-fg-tendered');
 
   if (mode === 'cash') {
     if (namePhone) namePhone.style.display = 'none';
     if (addr)      addr.style.display      = 'none';
     if (statusFg)  statusFg.style.display  = 'none';
+    if (tenderedFg) tenderedFg.style.display = 'block';
     document.getElementById('inv-cust-name').value = _walkInName();
     document.getElementById('inv-status').value = 'paid';
     window._selectedPayMethod = 'cash';
@@ -900,6 +943,7 @@ function openInvoiceModal(mode) {
     if (namePhone) namePhone.style.display = '';
     if (addr)      addr.style.display      = '';
     if (statusFg)  statusFg.style.display  = '';
+    if (tenderedFg) tenderedFg.style.display = 'none';
     // Reset customer type to wholesale (default since all prices are wholesale)
     window._invoicePriceType = 'wholesale';
     _updateCustomerTypePills('wholesale');
@@ -1020,6 +1064,28 @@ function calcTotal() {
     'Subtotal: ' + fmtGHS(subtotal) +
     ' | Discount: ' + fmtGHS(discount) +
     ' | Total: ' + fmtGHS(total);
+  updateChangeDisplay();
+}
+
+// Cash Sale only: shows the change due (or shortfall) as staff types in
+// what the customer handed over. Purely a live display — createInvoice()
+// re-derives and validates the real numbers itself before saving.
+function updateChangeDisplay() {
+  const changeEl = document.getElementById('inv-change-display');
+  if (!changeEl) return;
+  let subtotal = 0;
+  document.querySelectorAll('#line-items-body .line-item-row').forEach(row => {
+    const inp = row.querySelectorAll('input');
+    subtotal += (parseFloat(inp[1].value) || 0) * (parseFloat(inp[2].value) || 0);
+  });
+  const discount = Math.max(0, parseFloat(document.getElementById('inv-discount')?.value) || 0);
+  const total = Math.max(0, subtotal - discount);
+  const tenderedEl = document.getElementById('inv-cash-tendered');
+  const tendered = tenderedEl ? parseFloat(tenderedEl.value) || 0 : 0;
+  if (!tendered) { changeEl.textContent = ''; return; }
+  const change = tendered - total;
+  changeEl.textContent = change >= 0 ? 'Change due: ' + fmtGHS(change) : 'Short by ' + fmtGHS(Math.abs(change));
+  changeEl.style.color = change >= 0 ? 'var(--brand-green)' : 'var(--brand-red)';
 }
 
 async function createInvoice() {
@@ -1069,6 +1135,16 @@ async function createInvoice() {
   const number   = String(seq).padStart(6,'0');
   LS.set('lumoda_invoice_seq', seq+1);
 
+  const isCashSale = window._invoiceMode === 'cash';
+
+  let cashTendered = null;
+  if (isCashSale) {
+    const tenderedEl = document.getElementById('inv-cash-tendered');
+    cashTendered = tenderedEl ? parseFloat(tenderedEl.value) || 0 : 0;
+    if (!cashTendered) { invoiceSaving = false; toast('Enter how much cash the customer handed over', 'error'); return; }
+    if (cashTendered < total) { invoiceSaving = false; toast('Cash tendered is less than the total — check the amount', 'error'); return; }
+  }
+
   const invoice = {
     id:'inv_'+Date.now(),
     number,
@@ -1084,6 +1160,8 @@ async function createInvoice() {
     payMethod,
     momoNumber,
     notes,
+    isCashSale,
+    cashTendered,
     createdBy:currentUser.id,
     createdByName:currentUser.fullName,
     createdAt:Date.now(),
@@ -1107,19 +1185,33 @@ async function createInvoice() {
         p_pay_method:       payMethod || null,
         p_momo_number:      momoNumber || null,
         p_notes:            notes    || null,
-        p_discount:         discount || 0
+        p_discount:         discount || 0,
+        p_is_cash_sale:     isCashSale,
+        p_cash_tendered:    cashTendered
       });
       if (res.error) throw res.error;
+
+      if (res.data && res.data.discount_pending_approval) {
+        invoiceSaving = false;
+        closeModal('invoice-modal');
+        toast('Discount request sent — an admin needs to approve it before this sale can be completed', 'info');
+        return;
+      }
+
       await syncSupabaseCache();
-      addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+      addAudit(isCashSale ? 'Cash Sale Created' : 'Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
       invoiceSaving = false;
       closeModal('invoice-modal');
-      toast('Invoice '+number+' created!');
+      toast(isCashSale ? 'Cash sale '+number+' recorded!' : 'Invoice '+number+' created!');
       currentLocation = 'All';
       renderDashboard();
-      if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
+      if (isCashSale) {
+        if (document.getElementById('page-cashsales').classList.contains('active')) renderCashSales();
+      } else if (document.getElementById('page-invoices').classList.contains('active')) {
+        renderInvoices();
+      }
       try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
-      if (window._invoiceMode === 'cash') printInvoice(invoice);
+      if (isCashSale) printInvoice(invoice);
       return;
     } catch (err) {
       console.error('Invoice creation error:', err);
@@ -1132,16 +1224,20 @@ async function createInvoice() {
   const invoices = LS.get('lumoda_invoices')||[];
   invoices.push(invoice);
   LS.set('lumoda_invoices', invoices);
-  saveCustomerIfNew(name,phone,addr,loc);
-  addAudit('Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+  if (!isCashSale) saveCustomerIfNew(name,phone,addr,loc);
+  addAudit(isCashSale ? 'Cash Sale Created' : 'Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
   invoiceSaving = false;
   closeModal('invoice-modal');
-  toast('Invoice '+number+' created!');
+  toast(isCashSale ? 'Cash sale '+number+' recorded!' : 'Invoice '+number+' created!');
   currentLocation = 'All';
   renderDashboard();
-  if (document.getElementById('page-invoices').classList.contains('active')) renderInvoices();
+  if (isCashSale) {
+    if (document.getElementById('page-cashsales').classList.contains('active')) renderCashSales();
+  } else if (document.getElementById('page-invoices').classList.contains('active')) {
+    renderInvoices();
+  }
   try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
-  if (window._invoiceMode === 'cash') printInvoice(invoice);
+  if (isCashSale) printInvoice(invoice);
 }
 
 function viewInvoice(id) {
@@ -1240,6 +1336,10 @@ function buildInvoiceHTML(inv) {
       '<div><span style="font-size:13px;color:var(--gray-400)">Subtotal:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.subtotal || inv.total)+'</span></div>' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Discount:</span> <span style="font-family:var(--font-mono)">-'+fmtGHS(inv.discount || 0)+'</span></div>' +
       '<div><span style="font-size:13px;font-weight:500">Total </span> <span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--brand-brown)">'+fmtGHS(inv.total)+'</span></div>' +
+      (inv.isCashSale && inv.cashTendered != null ? (
+        '<div><span style="font-size:13px;color:var(--gray-400)">Cash Tendered:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.cashTendered)+'</span></div>' +
+        '<div><span style="font-size:13px;font-weight:500">Change </span> <span style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--brand-green)">'+fmtGHS(Math.max(0, inv.cashTendered - inv.total))+'</span></div>'
+      ) : '') +
     '</div>' +
 
     '<div style="padding:8px 14px;border-top:1px solid var(--gray-100);display:flex;justify-content:space-between;align-items:center;background:var(--gray-50)">' +
@@ -1649,7 +1749,11 @@ async function updateInvoice(id, updates) {
       await syncSupabaseCache();
 
       addAudit('Invoice Edited', currentUser.fullName+' edited invoice '+id+' [server]');
-      toast('Invoice updated');
+      if (res.data && res.data.items_pending_approval) {
+        toast('Saved — but removing/reducing an item needs admin approval first, so that part is on hold', 'info');
+      } else {
+        toast('Invoice updated');
+      }
 
       // Now re-render — cache is fresh so status/items show correctly
       viewInvoice(id);
@@ -2094,8 +2198,8 @@ function filterStockHistory(val){const q=val.toLowerCase();document.querySelecto
 // ============================================================
 // REPORTS
 // ============================================================
-function renderReports(){if(!isAdmin())return;const invoices=filterByLoc(getInvoices());const now=new Date();const today=startOfLocalDay(now);const weekStart=startOfWeek(now);const nextWeek=new Date(weekStart);nextWeek.setDate(nextWeek.getDate()+7);const prevWeek=new Date(weekStart);prevWeek.setDate(prevWeek.getDate()-7);const monthStart=new Date(now.getFullYear(),now.getMonth(),1);const todayTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=today));const weekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=weekStart&&t<nextWeek;}));const lastWeekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=prevWeek&&t<weekStart;}));const monthTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=monthStart));const allTotal=sumInvoiceTotal(invoices);document.getElementById('rep-today').textContent=fmtGHS(todayTotal);document.getElementById('rep-week').textContent=fmtGHS(weekTotal);document.getElementById('rep-last-week').textContent=fmtGHS(lastWeekTotal);document.getElementById('rep-week-delta').innerHTML=weekComparisonLabel(weekTotal,lastWeekTotal);document.getElementById('rep-month').textContent=fmtGHS(monthTotal);document.getElementById('rep-alltime').textContent=fmtGHS(allTotal);renderPaymentBreakdown(invoices);renderLocationBreakdown(invoices);renderTopProducts(invoices);renderMonthlyChart(invoices);}
-function renderPaymentBreakdown(invoices){const paid=invoices.filter(i=>i.status==='paid');const cash=paid.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);const momo=paid.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);const uns=paid.filter(i=>!i.payMethod).reduce((s,i)=>s+i.total,0);document.getElementById('payment-breakdown').innerHTML='<div style="display:grid;gap:8px"><div class="stat-card" style="padding:10px"><div class="stat-label">Cash</div><div class="stat-value" style="font-size:18px">'+fmtGHS(cash)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Mobile Money</div><div class="stat-value" style="font-size:18px">'+fmtGHS(momo)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Unspecified Paid</div><div class="stat-value" style="font-size:18px">'+fmtGHS(uns)+'</div></div></div>';}
+function renderReports(){if(!isAdmin())return;const invoices=filterByLoc(getInvoices());const now=new Date();const today=startOfLocalDay(now);const weekStart=startOfWeek(now);const nextWeek=new Date(weekStart);nextWeek.setDate(nextWeek.getDate()+7);const prevWeek=new Date(weekStart);prevWeek.setDate(prevWeek.getDate()-7);const monthStart=new Date(now.getFullYear(),now.getMonth(),1);const todayTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=today));const weekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=weekStart&&t<nextWeek;}));const lastWeekTotal=sumInvoiceTotal(invoices.filter(i=>{const t=asTimestamp(i.createdAt);return t>=prevWeek&&t<weekStart;}));const monthTotal=sumInvoiceTotal(invoices.filter(i=>asTimestamp(i.createdAt)>=monthStart));const allTotal=sumInvoiceTotal(invoices);document.getElementById('rep-today').textContent=fmtGHS(todayTotal);document.getElementById('rep-week').textContent=fmtGHS(weekTotal);document.getElementById('rep-last-week').textContent=fmtGHS(lastWeekTotal);document.getElementById('rep-week-delta').innerHTML=weekComparisonLabel(weekTotal,lastWeekTotal);document.getElementById('rep-month').textContent=fmtGHS(monthTotal);document.getElementById('rep-alltime').textContent=fmtGHS(allTotal);renderPaymentBreakdown(invoices,filterByLoc(getCashSales()));renderLocationBreakdown(invoices);renderTopProducts(invoices);renderMonthlyChart(invoices);}
+function renderPaymentBreakdown(invoices,cashSales){const paid=invoices.filter(i=>i.status==='paid');const cash=paid.filter(i=>i.payMethod==='cash').reduce((s,i)=>s+i.total,0);const momo=paid.filter(i=>i.payMethod==='momo').reduce((s,i)=>s+i.total,0);const uns=paid.filter(i=>!i.payMethod).reduce((s,i)=>s+i.total,0);const cashSalesTotal=(cashSales||[]).reduce((s,i)=>s+i.total,0);document.getElementById('payment-breakdown').innerHTML='<div style="display:grid;gap:8px"><div class="stat-card" style="padding:10px"><div class="stat-label">💵 Cash Sales (walk-in)</div><div class="stat-value" style="font-size:18px">'+fmtGHS(cashSalesTotal)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Cash (from invoices)</div><div class="stat-value" style="font-size:18px">'+fmtGHS(cash)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Mobile Money</div><div class="stat-value" style="font-size:18px">'+fmtGHS(momo)+'</div></div><div class="stat-card" style="padding:10px"><div class="stat-label">Unspecified Paid</div><div class="stat-value" style="font-size:18px">'+fmtGHS(uns)+'</div></div></div>';}
 function renderLocationBreakdown(invoices){const locs=LOCATIONS;document.getElementById('location-breakdown').innerHTML=locs.map(l=>{const arr=invoices.filter(i=>i.location===l);return '<div style="display:flex;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--gray-100)"><span>'+l+'</span><strong>'+fmtGHS(sumInvoiceTotal(arr))+'</strong><span class="mono" style="color:var(--gray-400)">'+arr.length+' inv</span></div>';}).join('');}
 function renderTopProducts(invoices){const map={};invoices.forEach(inv=>inv.items.forEach(it=>{map[it.name]=(map[it.name]||0)+it.total;}));const top=Object.entries(map).sort((a,b)=>b[1]-a[1]).slice(0,5);document.getElementById('top-products').innerHTML=top.length?top.map(([n,t],i)=>'<div style="display:flex;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--gray-100)"><span>'+(i+1)+'. '+escapeHtml(n)+'</span><strong>'+fmtGHS(t)+'</strong></div>').join(''):'<div style="color:var(--gray-400);font-size:13px">No product sales yet</div>';}
 function renderMonthlyChart(invoices){const months=[];const now=new Date();for(let i=5;i>=0;i--){const d=new Date(now.getFullYear(),now.getMonth()-i,1);const next=new Date(d.getFullYear(),d.getMonth()+1,1);const total=invoices.filter(inv=>{const t=asTimestamp(inv.createdAt);return t>=d&&t<next;}).reduce((s,inv)=>s+inv.total,0);months.push({label:d.toLocaleDateString('en',{month:'short'}),total});}const max=Math.max(...months.map(m=>m.total),1);document.getElementById('monthly-chart').innerHTML=months.map(m=>{const h=Math.round(m.total/max*120);return '<div class="chart-bar-wrap"><div style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">'+(m.total>0?'GH₵'+Math.round(m.total):'')+'</div><div class="chart-bar" style="height:'+h+'px"></div><div class="chart-bar-label">'+m.label+'</div></div>';}).join('');}
@@ -2144,7 +2248,7 @@ async function renderUsers() {
         id: profile.id, email: profile.email || '', username: profile.username,
         fullName: profile.full_name, role: profile.role, location: profile.location,
         active: profile.active !== false, mustChangePassword: !!profile.must_change_password,
-        lockedUntil: null, lastLogin: null
+        lockedUntil: null, lastLogin: profile.last_login ? new Date(profile.last_login).getTime() : null
       }));
     } catch (error) { console.warn('Could not load Supabase profiles.', error); }
   }
@@ -2362,6 +2466,122 @@ async function renderAuditLog() {
 function filterAudit(val){const q=val.toLowerCase();document.querySelectorAll('#audit-list .audit-item').forEach(el=>el.style.display=el.textContent.toLowerCase().includes(q)?'':'none');}
 
 // ============================================================
+// PENDING APPROVALS (discount requests + item-removal requests)
+// ============================================================
+async function refreshApprovalsBadge() {
+  if (!isAdmin() || !window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
+  try {
+    const rows  = await window.LumodaSupabase.loadInvoiceEditRequests();
+    const badge = document.getElementById('approvals-badge');
+    if (!badge) return;
+    if (rows.length > 0) { badge.textContent = rows.length; badge.style.display = 'inline-block'; }
+    else { badge.style.display = 'none'; }
+  } catch (e) {
+    console.warn('Could not load pending approvals count:', e);
+  }
+}
+
+async function renderApprovals() {
+  if (!isAdmin()) return;
+  const container = document.getElementById('approvals-list');
+  if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--gray-400)">Approvals require an online connection</div>';
+    return;
+  }
+
+  let rows = [];
+  try {
+    rows = await window.LumodaSupabase.loadInvoiceEditRequests();
+  } catch (e) {
+    console.error('Could not load approvals:', e);
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--gray-400)">Could not load pending approvals</div>';
+    return;
+  }
+
+  const badge = document.getElementById('approvals-badge');
+  if (badge) { if (rows.length > 0) { badge.textContent = rows.length; badge.style.display = 'inline-block'; } else { badge.style.display = 'none'; } }
+
+  if (!rows.length) {
+    container.innerHTML = '<div style="padding:40px;text-align:center;color:var(--gray-400)">Nothing waiting on you right now</div>';
+    return;
+  }
+
+  container.innerHTML = rows.map(r => {
+    const who = escapeHtml((r.profiles && r.profiles.full_name) || 'Unknown staff') + ' · ' + escapeHtml((r.profiles && r.profiles.location) || '');
+    const when = fmtDateTime(new Date(r.requested_at).getTime());
+
+    if (r.request_type === 'discount') {
+      const p = r.payload || {};
+      const items = Array.isArray(p.p_items) ? p.p_items : [];
+      const itemsHtml = items.map(it => '<div style="font-size:12.5px;color:var(--gray-600)">' + escapeHtml(String(it.qty)) + ' × ' + escapeHtml(it.name || '') + ' @ ' + fmtGHS(it.price || 0) + '</div>').join('');
+      return '<div class="audit-item" style="align-items:flex-start">' +
+        '<div class="audit-dot" style="background:var(--brand-yellow)"></div>' +
+        '<div style="flex:1">' +
+          '<div style="font-size:13px"><span class="badge badge-warning">Discount request</span> ' +
+          '<strong>' + escapeHtml(p.p_customer_name || 'Unnamed customer') + '</strong> — discount of ' + fmtGHS(p.p_discount || 0) +
+          '</div>' +
+          itemsHtml +
+          '<div class="audit-meta">Requested by ' + who + ' · ' + when + '</div>' +
+          '<div style="margin-top:8px;display:flex;gap:8px">' +
+            '<button class="btn btn-primary btn-sm" onclick="approveRequest(\'' + r.id + '\')">Approve</button>' +
+            '<button class="btn btn-secondary btn-sm" onclick="rejectRequest(\'' + r.id + '\')">Reject</button>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+    }
+
+    // item_change request
+    const inv = r.invoices || {};
+    const items = Array.isArray(r.payload) ? r.payload : [];
+    const itemsHtml = items.map(it => '<div style="font-size:12.5px;color:var(--gray-600)">' + escapeHtml(String(it.qty)) + ' × ' + escapeHtml(it.name || '') + ' @ ' + fmtGHS(it.price || 0) + '</div>').join('');
+    return '<div class="audit-item" style="align-items:flex-start">' +
+      '<div class="audit-dot" style="background:var(--brand-red)"></div>' +
+      '<div style="flex:1">' +
+        '<div style="font-size:13px"><span class="badge badge-danger">Item removal</span> ' +
+        'Invoice <strong>' + escapeHtml(inv.number || r.invoice_id) + '</strong> — ' + escapeHtml(inv.customer_name || '') +
+        '</div>' +
+        '<div class="audit-meta" style="margin-bottom:4px">Proposed item list after the change:</div>' +
+        itemsHtml +
+        '<div class="audit-meta">Requested by ' + who + ' · ' + when + '</div>' +
+        '<div style="margin-top:8px;display:flex;gap:8px">' +
+          '<button class="btn btn-primary btn-sm" onclick="approveRequest(\'' + r.id + '\')">Approve</button>' +
+          '<button class="btn btn-secondary btn-sm" onclick="rejectRequest(\'' + r.id + '\')">Reject</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+async function approveRequest(id) {
+  if (!requireAdmin('approve requests')) return;
+  try {
+    const res = await window.LumodaSupabase.approveInvoiceRequest(id);
+    if (res.error) throw res.error;
+    await syncSupabaseCache();
+    addAudit('Request Approved', currentUser.fullName + ' approved edit request ' + id);
+    toast('Approved');
+    renderApprovals();
+    renderDashboard();
+  } catch (err) {
+    toast(err.message || 'Could not approve request', 'error');
+  }
+}
+
+async function rejectRequest(id) {
+  if (!requireAdmin('reject requests')) return;
+  const reason = prompt('Reason for rejecting (optional):') || '';
+  try {
+    const res = await window.LumodaSupabase.rejectInvoiceRequest(id, reason);
+    if (res.error) throw res.error;
+    addAudit('Request Rejected', currentUser.fullName + ' rejected edit request ' + id + (reason ? ' — ' + reason : ''));
+    toast('Rejected');
+    renderApprovals();
+  } catch (err) {
+    toast(err.message || 'Could not reject request', 'error');
+  }
+}
+
+// ============================================================
 // MODALS
 // ============================================================
 function openModal(id){document.getElementById(id).classList.add('open');}
@@ -2467,6 +2687,10 @@ function printInvoice(inv) {
         <div style="text-align:right;font-size:13px;color:#555">Subtotal: ${fmtGHS(inv.subtotal || inv.total)}</div>
         <div style="text-align:right;font-size:13px;color:#555">Discount: -${fmtGHS(inv.discount || 0)}</div>
         <div style="text-align:right;font-size:16px;font-weight:800">Total: ${fmtGHS(inv.total)}</div>
+        ${inv.isCashSale && inv.cashTendered != null ? `
+        <div style="text-align:right;font-size:13px;color:#555">Cash Tendered: ${fmtGHS(inv.cashTendered)}</div>
+        <div style="text-align:right;font-size:15px;font-weight:800;color:#1a7a3c">Change: ${fmtGHS(Math.max(0, inv.cashTendered - inv.total))}</div>
+        ` : ''}
         <div style="margin-top:8px;font-size:11px;color:#555">
           <strong>Status:</strong> ${escapeHtml(inv.status.toUpperCase())}
           ${pmLine}${noteLine}

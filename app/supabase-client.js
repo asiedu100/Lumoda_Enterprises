@@ -129,7 +129,7 @@
       .select(`
         id, number, customer_name, customer_phone, customer_address,
         location, subtotal, discount, total, status, pay_method, momo_number, notes,
-        amount_paid, balance, partial_method, partial_momo_number,
+        amount_paid, balance, partial_method, partial_momo_number, is_cash_sale, cash_tendered,
         created_by, created_at, deleted, deleted_at, deleted_by,
         creator:profiles!invoices_created_by_fkey (full_name, username),
         invoice_items(*),
@@ -171,6 +171,8 @@
         at:         p.created_at ? new Date(p.created_at).getTime() : Date.now()
       })),
       notes:         row.notes       || '',
+      isCashSale:    !!row.is_cash_sale,
+      cashTendered:  row.cash_tendered != null ? Number(row.cash_tendered) : null,
       createdBy:     row.created_by,
       createdByName: row.created_by
         ? (row.creator ? row.creator.full_name || row.creator.username || '' : '')
@@ -187,10 +189,16 @@
     if (!sb) throw new Error('Supabase is not configured.');
     const { data, error } = await sb
       .from('profiles')
-      .select('id, email, username, full_name, role, location, active, must_change_password, created_at, updated_at')
+      .select('id, email, username, full_name, role, location, active, must_change_password, created_at, updated_at, last_login')
       .order('created_at', { ascending: false });
     if (error) throw error;
     return data || [];
+  }
+
+  async function recordLogin() {
+    const sb = getClient();
+    if (!sb) return;
+    return sb.rpc('record_login');
   }
 
   async function createInvoiceNoStock(payload) {
@@ -216,7 +224,9 @@
       p_amount_paid:      payload.p_amount_paid      || 0,
       p_discount:         payload.p_discount         || 0,
       p_partial_method:   payload.p_partial_method   || null,
-      p_partial_momo:     payload.p_partial_momo     || null
+      p_partial_momo:     payload.p_partial_momo     || null,
+      p_is_cash_sale:     payload.p_is_cash_sale     || false,
+      p_cash_tendered:    payload.p_cash_tendered    != null ? payload.p_cash_tendered : null
     });
   }
 
@@ -485,6 +495,43 @@
     return { data, error: null };
   }
 
+  // ============================================================
+  // Approval-gated invoice edits (item removal / discount requests)
+  // ============================================================
+  async function loadInvoiceEditRequests() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb
+      .from('invoice_edit_requests')
+      .select('*, profiles:requested_by(full_name, username, location), invoices:invoice_id(number, customer_name, location)')
+      .eq('status', 'pending')
+      .order('requested_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function approveInvoiceRequest(requestId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.rpc('approve_invoice_request', { p_request_id: requestId });
+    if (error) {
+      console.error('approve_invoice_request RPC error:', error);
+      return { data: null, error };
+    }
+    return { data, error: null };
+  }
+
+  async function rejectInvoiceRequest(requestId, reason) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.rpc('reject_invoice_request', { p_request_id: requestId, p_reason: reason || null });
+    if (error) {
+      console.error('reject_invoice_request RPC error:', error);
+      return { data: null, error };
+    }
+    return { data, error: null };
+  }
+
     // ============================================================
   // WAREHOUSE
   // ============================================================
@@ -603,11 +650,16 @@
     loadCustomers,
     loadInvoices,
     loadProfiles,
+    recordLogin,
 
     createInvoiceNoStock,
     updateInvoiceNoStock,
     softDeleteInvoiceNoStock,
     recordPartialPayment,
+
+    loadInvoiceEditRequests,
+    approveInvoiceRequest,
+    rejectInvoiceRequest,
 
     loadSalesBreakdown,
     loadOutstandingBalances,

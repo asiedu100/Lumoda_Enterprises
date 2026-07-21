@@ -133,6 +133,9 @@
     </div>
     <div class="nav-section">
       <div class="nav-lbl">Sales</div>
+      <div class="nav-item" data-page="cashsales" onclick="navigate('cashsales',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 4a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4zm7 1.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5zM3 5v1h1V5H3zm9 5v1h1v-1h-1z"/></svg>Cash Sales
+      </div>
       <div class="nav-item" data-page="invoices" onclick="navigate('invoices',this)">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M2 1a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v14l-2-1-2 1-2-1-2 1-2-1-2 1V1zm2 2v1h8V3H4zm0 3v1h8V6H4zm0 3v1h5V9H4z"/></svg>Invoices
       </div>
@@ -163,6 +166,9 @@
       </div>
       <div class="nav-item" data-page="audit" onclick="navigate('audit',this)">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M1 2a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1H1V2zm0 3h14v9a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V5zm3 2v1h8V7H4zm0 3v1h5v-1H4z"/></svg>Audit Log
+      </div>
+      <div class="nav-item" data-page="approvals" onclick="navigate('approvals',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 2.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h11zM7 8.3 5 6.3l-1 1L7 10.3l5-5-1-1-4 4z"/></svg>Approvals<span id="approvals-badge" class="nav-badge" style="display:none"></span>
       </div>
     </div>
     <div class="sidebar-footer">
@@ -197,15 +203,15 @@
       <div class="page active" id="page-dashboard">
         <div class="greeting-bar"><h1 id="dash-greeting">Good morning 👋</h1><p id="dash-date"></p></div>
         <div class="stats-grid">
-          <div class="stat-card"><div class="stat-label">Today's Sales</div><div class="stat-value" id="stat-today">GH₵ 0</div><div class="stat-delta up" id="stat-today-d">0 invoices</div></div>
-          <div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value" id="stat-week">GH₵ 0</div><div class="stat-delta" id="stat-week-d">0 invoices</div></div>
-          <div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value" id="stat-pending">GH₵ 0</div><div class="stat-delta down" id="stat-pending-d">0 outstanding</div></div>
+          <div class="stat-card"><div class="stat-label" id="stat-today-label">Today's Sales</div><div class="stat-value" id="stat-today">GH₵ 0</div><div class="stat-delta up" id="stat-today-d">0 invoices</div></div>
+          <div class="stat-card"><div class="stat-label" id="stat-week-label">This Week</div><div class="stat-value" id="stat-week">GH₵ 0</div><div class="stat-delta" id="stat-week-d">0 invoices</div></div>
+          <div class="stat-card"><div class="stat-label" id="stat-pending-label">Pending</div><div class="stat-value" id="stat-pending">GH₵ 0</div><div class="stat-delta down" id="stat-pending-d">0 outstanding</div></div>
           <div class="stat-card"><div class="stat-label">Customers</div><div class="stat-value" id="stat-customers">0</div><div class="stat-delta" id="stat-customers-d">in your branch</div></div>
         </div>
         <!-- Cash vs MoMo today -->
         <div id="dash-pm-panel" style="display:none;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
-          <div class="stat-card"><div class="stat-label">💵 Cash Today</div><div class="stat-value" id="stat-cash">GH₵ 0</div></div>
-          <div class="stat-card"><div class="stat-label">📱 MoMo Today</div><div class="stat-value" id="stat-momo">GH₵ 0</div></div>
+          <div class="stat-card"><div class="stat-label" id="stat-cash-label">💵 Cash Today</div><div class="stat-value" id="stat-cash">GH₵ 0</div></div>
+          <div class="stat-card"><div class="stat-label" id="stat-momo-label">📱 MoMo Today</div><div class="stat-value" id="stat-momo">GH₵ 0</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
           <div class="card">
@@ -234,9 +240,20 @@
             </select>
             <div style="flex:1"></div>
             <button class="btn btn-primary" onclick="openInvoiceModal()">+ New Invoice</button>
-            <button class="btn btn-secondary" onclick="openInvoiceModal('cash')">💵 Cash Sale</button>
           </div>
           <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Customer</th><th>Location</th><th>Items</th><th>Total</th><th>Status</th><th>Payment</th><th>By</th><th></th></tr></thead><tbody id="invoices-body"></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- CASH SALES -->
+      <div class="page" id="page-cashsales">
+        <div class="card">
+          <div class="card-header">
+            <div class="search-wrap"><input type="text" placeholder="Search cash sales…" oninput="filterCashSales(this.value)"></div>
+            <div style="flex:1"></div>
+            <button class="btn btn-primary" onclick="openInvoiceModal('cash')">💵 Cash Sale</button>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Date</th><th>Location</th><th>Items</th><th>Total</th><th>By</th><th></th></tr></thead><tbody id="cashsales-body"></tbody></table></div>
         </div>
       </div>
 
@@ -340,6 +357,17 @@
         </div>
       </div>
 
+      <!-- PENDING APPROVALS -->
+      <div class="page" id="page-approvals">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Pending Approvals</div>
+            <div style="font-size:12px;color:var(--gray-400)">Discount requests and item removals from staff, waiting on you</div>
+          </div>
+          <div id="approvals-list"></div>
+        </div>
+      </div>
+
     </div>
   </main>
 </div>
@@ -429,6 +457,12 @@
 </div>
 
 <div class="inv-total" id="invoice-total-display">Total: GH₵ 0.00</div>
+
+<div class="form-group" id="inv-fg-tendered" style="display:none;margin-top:10px">
+  <label class="form-label">Cash Tendered (GH₵)</label>
+  <input class="form-input" id="inv-cash-tendered" type="number" min="0" placeholder="Amount handed over by customer" oninput="updateChangeDisplay()">
+  <div id="inv-change-display" style="margin-top:6px;font-size:13px;font-weight:600;color:var(--brand-brown)"></div>
+</div>
 
 <div class="form-group" style="margin-top:10px">
   <label class="form-label">Notes</label>

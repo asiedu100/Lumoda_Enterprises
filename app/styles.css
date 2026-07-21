@@ -37,6 +37,7 @@ body{font-family:var(--font-sans);background:var(--gray-50);color:var(--black);m
 .nav-item:hover{color:var(--white);background:rgba(255,255,255,.07)}
 .nav-item.active{color:var(--white);border-left-color:var(--brand-yellow);background:rgba(255,255,255,.1)}
 .nav-icon{width:15px;height:15px;opacity:.55;flex-shrink:0}
+.nav-badge{margin-left:auto;background:var(--brand-red);color:var(--white);font-size:10px;font-weight:600;padding:1px 6px;border-radius:10px;font-family:var(--font-mono)}
 .nav-item.active .nav-icon,.nav-item:hover .nav-icon{opacity:1}
 .sidebar-footer{margin-top:auto;padding:14px;border-top:1px solid rgba(255,255,255,.1)}
 .logout-btn{width:100%;padding:8px;background:transparent;border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.5);border-radius:var(--radius);cursor:pointer;font-size:12px;font-family:var(--font-sans);transition:all .2s}
@@ -237,7 +238,7 @@ tr:hover td{background:var(--gray-50)}
 /* MISC */
 .offline-badge{position:fixed;top:12px;right:16px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;padding:4px 12px;border-radius:20px;font-size:11px;font-family:var(--font-mono);z-index:500;display:none}
 .toast{position:fixed;bottom:22px;right:22px;background:var(--black);color:var(--white);padding:11px 18px;border-radius:var(--radius);font-size:13px;z-index:1000;opacity:0;transform:translateY(8px);transition:all .3s;pointer-events:none;max-width:310px}
-.toast.show{opacity:1;transform:translateY(0)}.toast.error{background:#dc2626}
+.toast.show{opacity:1;transform:translateY(0)}.toast.error{background:#dc2626}.toast.info{background:var(--brand-brown)}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 .session-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;animation:pulse 2s infinite;margin-right:5px}
 ::-webkit-scrollbar{width:4px;height:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--gray-200);border-radius:2px}

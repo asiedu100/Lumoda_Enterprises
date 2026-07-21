@@ -1,5 +1,24 @@
 document.getElementById('year').textContent = new Date().getFullYear();
 
+// Promotions banner — shows automatically when today falls inside a configured
+// date range, so running a sale needs no HTML edits, just a date range here.
+(function () {
+  var PROMOTIONS = [
+    // { title: 'Independence Day Sale', text: '15% off cookware — this week only!', start: '2026-08-01', end: '2026-08-07' }
+  ];
+
+  var banner = document.getElementById('promo-banner');
+  var textEl = document.getElementById('promo-banner-text');
+  if (!banner || !textEl) return;
+
+  var today = new Date().toISOString().slice(0, 10);
+  var active = PROMOTIONS.find(function (p) { return today >= p.start && today <= p.end; });
+  if (!active) return;
+
+  textEl.textContent = (active.title ? active.title + ' — ' : '') + active.text;
+  banner.style.display = 'flex';
+})();
+
 // Hero background crossfade carousel
 (function () {
   var slides = document.querySelectorAll('.hero-bg');
