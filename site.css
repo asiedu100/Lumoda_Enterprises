@@ -153,6 +153,8 @@ img,svg{display:block;max-width:100%}
 }
 @media (max-width:520px){
   .header-inner{flex-wrap:wrap}
+  .btn-login{padding:13px 18px}
+  .chip{padding:11px 14px}
   .brand-text-tag{display:none}
   .hero h1{font-size:26px}
   .values-grid{grid-template-columns:1fr}

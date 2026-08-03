@@ -17,6 +17,15 @@ const LOW_STOCK_PAGE_SIZE  = 15;
 const BALANCE_PAGE_SIZE    = 20;
 
 // ============================================================
+// WAREHOUSE (location) SELECTION
+// currentWarehouseId is which warehouse Stock In/Out/Adjustment write to,
+// and (unless 'all') which one the balance/movement views are scoped to.
+// 'all' is only meaningful for admins — RLS already limits a
+// warehouse_manager's synced data to warehouses they're assigned to.
+// ============================================================
+let currentWarehouseId = null;
+
+// ============================================================
 // LOCAL STORAGE HELPERS
 // ============================================================
 function getWarehouseMovementsLocal() {
@@ -42,6 +51,51 @@ function getWarehouseBalancesLocal() {
 }
 function saveWarehouseBalancesLocal(balances) {
   localStorage.setItem('lumoda_warehouse_stock_balance', JSON.stringify(balances || []));
+}
+function getWarehousesLocal() {
+  return JSON.parse(localStorage.getItem('lumoda_warehouses') || '[]');
+}
+function saveWarehousesLocal(warehouses) {
+  localStorage.setItem('lumoda_warehouses', JSON.stringify(warehouses || []));
+}
+
+// Balances/movements scoped to the selected warehouse (or all of them, for
+// an admin who has 'all' selected). Every read in this file should go
+// through these two instead of the raw *Local() getters above.
+function getScopedWarehouseBalances() {
+  const all = getWarehouseBalancesLocal();
+  if (!currentWarehouseId || currentWarehouseId === 'all') return all;
+  // The item catalog is shared across every warehouse, so a warehouse should
+  // always list every catalog item (at 0 cartons if nothing's been recorded
+  // there yet) rather than only the items that already have a balance row —
+  // otherwise a brand-new warehouse looks empty of items instead of just
+  // empty of stock.
+  const realForWarehouse = all.filter(b => b.warehouseId === currentWarehouseId);
+  const realByCode = new Map(realForWarehouse.map(b => [b.itemCode, b]));
+  const catalog = getWarehouseProductsLocal();
+  const catalogByCode = new Map(catalog.map(p => [p.code, p]));
+
+  // Union of the catalog and any real balance rows — a real balance row
+  // always wins even if its item somehow isn't (yet) in the catalog table,
+  // so genuine stock is never hidden just because of a catalog mismatch.
+  const codes = new Set([...catalogByCode.keys(), ...realByCode.keys()]);
+  return [...codes].map(code => realByCode.get(code) || {
+    id: null,
+    warehouseId: currentWarehouseId,
+    itemCode: code,
+    itemName: catalogByCode.get(code)?.name || code,
+    totalCartons: 0,
+    reservedCartons: 0,
+    availableCartons: 0,
+    reorderLevel: catalogByCode.get(code)?.reorder || 10,
+    unitPrice: 0,
+    updatedAt: null
+  });
+}
+function getScopedWarehouseMovements() {
+  const all = getWarehouseMovementsLocal();
+  if (!currentWarehouseId || currentWarehouseId === 'all') return all;
+  return all.filter(m => m.warehouseId === currentWarehouseId);
 }
 
 function isWarehouseSyncEnabled() {
@@ -89,12 +143,33 @@ function formatWarehouseType(type) {
   return labels[type] || type || '—';
 }
 
+function warehouseTypeBadgeClass(type) {
+  const classes = {
+    stock_in:        'badge-success',
+    stock_out:       'badge-warning',
+    adjustment:      'badge-info',
+    opening_balance: 'badge-neutral'
+  };
+  return classes[type] || 'badge-neutral';
+}
+
 // ============================================================
 // NORMALIZERS
 // ============================================================
+function normalizeWarehouse(row) {
+  return {
+    id:       row.id,
+    code:     row.code || '',
+    name:     row.name || '',
+    address:  row.address || '',
+    active:   row.active !== false
+  };
+}
+
 function normalizeWarehouseMovement(row) {
   return {
     id:              row.id,
+    warehouseId:     row.warehouse_id || row.warehouseId || null,
     type:            row.type,
     requisitionNo:   row.requisition_no   || row.requisitionNo   || '',
     issueTo:         row.issue_to         || row.issueTo         || '',
@@ -115,7 +190,9 @@ function normalizeWarehouseMovement(row) {
 function normalizeWarehouseProduct(row) {
   return {
     id:            row.id,
-    code:          row.code || '',
+    // The live warehouse_products table's column is `sku`, not `code` — this
+    // previously always fell through to '' for any Supabase-synced product.
+    code:          row.sku || row.code || '',
     name:          row.name || '',
     category:      row.category || 'General',
     reorder:       Number(row.reorder_level || row.reorder || 0),
@@ -139,6 +216,7 @@ function normalizeWarehouseSupplier(row) {
 function normalizeWarehouseBalance(row) {
   return {
     id:               row.id,
+    warehouseId:      row.warehouse_id     || row.warehouseId     || null,
     itemCode:         row.item_code        || row.itemCode        || '',
     itemName:         row.item_name        || row.itemName        || row.description || '',
     totalCartons:     Number(row.total_cartons     || row.totalCartons     || 0),
@@ -156,19 +234,39 @@ function normalizeWarehouseBalance(row) {
 async function syncWarehouseCacheFromServer() {
   if (!isWarehouseSyncEnabled()) return;
   try {
-    const [movements, products, suppliers, balances] = await Promise.all([
+    const [movements, products, suppliers, balances, warehouses] = await Promise.all([
       window.LumodaSupabase.loadWarehouseMovements?.().catch(() => []),
       window.LumodaSupabase.loadWarehouseProducts?.().catch(() => []),
       window.LumodaSupabase.loadWarehouseSuppliers?.().catch(() => []),
-      window.LumodaSupabase.loadWarehouseStockBalance?.().catch(() => [])
+      window.LumodaSupabase.loadWarehouseStockBalance?.().catch(() => []),
+      window.LumodaSupabase.loadWarehouses?.().catch(() => [])
     ]);
     if (Array.isArray(movements)) saveWarehouseMovementsLocal(movements.map(normalizeWarehouseMovement));
     if (Array.isArray(products))  saveWarehouseProductsLocal(products.map(normalizeWarehouseProduct));
     if (Array.isArray(suppliers)) saveWarehouseSuppliersLocal(suppliers.map(normalizeWarehouseSupplier));
     if (Array.isArray(balances))  saveWarehouseBalancesLocal(balances.map(normalizeWarehouseBalance));
+    if (Array.isArray(warehouses)) saveWarehousesLocal(warehouses.map(normalizeWarehouse));
   } catch (error) {
     console.warn('Warehouse sync failed', error);
   }
+  ensureCurrentWarehouseSelected();
+}
+
+// Picks a sensible default: keep the current selection if it's still valid;
+// otherwise an admin defaults to 'all', anyone else defaults to their one
+// (or first) assigned warehouse — RLS already means the synced list only
+// contains warehouses they can access.
+function ensureCurrentWarehouseSelected() {
+  const list = getWarehousesLocal().filter(w => w.active);
+  const stillValid = currentWarehouseId === 'all' || list.some(w => w.id === currentWarehouseId);
+  if (stillValid) return;
+  currentWarehouseId = isAdmin() ? 'all' : (list[0] ? list[0].id : 'all');
+}
+
+function switchWarehouse(id) {
+  currentWarehouseId = id;
+  resetWarehousePagination();
+  renderWarehouse();
 }
 
 // ============================================================
@@ -228,7 +326,7 @@ function filterBalanceSearch(val) {
 
 // Re-render only the low stock card (no full page re-render)
 function _rerenderLowStock() {
-  const balances      = getWarehouseBalancesLocal();
+  const balances      = getScopedWarehouseBalances();
   const lowStockItems = balances.filter(b =>
     Number(b.availableCartons || 0) <= Number(b.reorderLevel || 10)
   );
@@ -238,7 +336,7 @@ function _rerenderLowStock() {
 
 // Re-render only the balance table (no full page re-render)
 function _rerenderBalance() {
-  const balances  = getWarehouseBalancesLocal();
+  const balances  = getScopedWarehouseBalances();
   const container = document.getElementById('wh-balance-container');
   if (container) container.innerHTML = _buildBalanceHTML(balances);
 }
@@ -253,9 +351,12 @@ function _buildLowStockHTML(lowStockItems) {
     </div>`;
   }
 
-  const showing = Math.min(lowStockPage, lowStockItems.length);
-  const visible = lowStockItems.slice(0, showing);
-  const remaining = lowStockItems.length - showing;
+  // Out-of-stock first, then lowest-available-first within the rest.
+  const sorted = [...lowStockItems].sort((a, b) => Number(a.availableCartons || 0) - Number(b.availableCartons || 0));
+
+  const showing = Math.min(lowStockPage, sorted.length);
+  const visible = sorted.slice(0, showing);
+  const remaining = sorted.length - showing;
 
   const rows = visible.map(b => {
     const available  = Number(b.availableCartons || 0);
@@ -309,7 +410,7 @@ function _buildLowStockHTML(lowStockItems) {
   const counter = `
     <div style="font-size:11px;color:var(--gray-400);font-family:var(--font-mono);
                 margin-bottom:10px;text-align:right">
-      Showing ${showing} of ${lowStockItems.length}
+      Showing ${showing} of ${sorted.length}
     </div>`;
 
   return counter + rows + footer;
@@ -339,29 +440,59 @@ function _buildBalanceHTML(allBalances) {
       </div>`;
   }
 
-  const rows = visible.map(b => `
-    <tr>
-      <td class="mono">${escapeHtml(b.itemCode)}</td>
+  const admin = isAdmin();
+  // Whether an item has real stock in ANY warehouse — the catalog is shared,
+  // so deleting an item removes it everywhere, not just the warehouse
+  // currently being viewed. Only items with zero stock everywhere are safe
+  // to delete (mirrors the same rule used for deleting a warehouse itself).
+  const globalBalances = getWarehouseBalancesLocal();
+  const catalog = getWarehouseProductsLocal();
+
+  const rows = visible.map(b => {
+    const available = Number(b.availableCartons || 0);
+    const reorder    = Number(b.reorderLevel || 10);
+    const isLow      = available <= reorder;
+    const isCritical = available === 0;
+    // Same red/amber tokens as the Low Stock card, so a problem item reads
+    // the same way whether you spot it there or scanning this full table.
+    const rowBg     = isCritical ? 'background:#fef2f2' : isLow ? 'background:#fefce8' : '';
+    const stripeClr = isCritical ? '#dc2626' : isLow ? '#f59e0b' : 'transparent';
+
+    let actionsCell = '';
+    if (admin) {
+      const product = catalog.find(p => p.code === b.itemCode);
+      const hasStockAnywhere = globalBalances.some(x => x.itemCode === b.itemCode && Number(x.totalCartons) > 0);
+      actionsCell = (product && !hasStockAnywhere)
+        ? `<button class="btn btn-secondary btn-sm" onclick="deleteWarehouseProductItem('${product.id}')" style="color:#991b1b">Delete</button>`
+        : `<button class="btn btn-secondary btn-sm" disabled title="${!product ? 'Not in the item catalog yet' : 'Has stock in a warehouse — remove the stock first'}" style="opacity:.5;cursor:not-allowed">Delete</button>`;
+    }
+
+    return `
+    <tr style="${rowBg}">
+      <td class="mono" style="box-shadow:inset 3px 0 0 ${stripeClr}">${escapeHtml(b.itemCode)}</td>
       <td style="font-weight:500">${escapeHtml(b.itemName)}</td>
       <td class="mono" style="text-align:center">${b.totalCartons}</td>
       <td class="mono" style="text-align:center;color:var(--gray-400)">${b.reservedCartons}</td>
       <td class="mono" style="text-align:center;font-weight:700;color:${
-        Number(b.availableCartons) <= Number(b.reorderLevel || 10) ? '#dc2626' : 'var(--brand-brown)'
-      }">${b.availableCartons}</td>
-      <td class="mono" style="text-align:center;color:var(--gray-400)">${b.reorderLevel || 10}</td>
+        isLow ? '#dc2626' : 'var(--brand-brown)'
+      }">${available}</td>
+      <td class="mono" style="text-align:center;color:var(--gray-400)">${reorder}</td>
       <td>
-        ${Number(b.availableCartons || 0) <= Number(b.reorderLevel || 10)
+        ${isLow
           ? '<span class="badge badge-danger">Reorder</span>'
           : '<span class="badge badge-success">OK</span>'
         }
       </td>
-      <td class="mono" style="font-size:11px;color:var(--gray-400)">${whDate(b.updatedAt)}</td>
+      <td class="mono" style="font-size:11px;color:var(--gray-400)">${b.updatedAt ? whDate(b.updatedAt) : '—'}</td>
+      ${admin ? `<td>${actionsCell}</td>` : ''}
     </tr>
-  `).join('');
+  `;
+  }).join('');
 
+  const colCount = admin ? 9 : 8;
   const loadMoreRow = remaining > 0
     ? `<tr>
-         <td colspan="8" style="padding:0;border:none">
+         <td colspan="${colCount}" style="padding:0;border:none">
            <button onclick="loadMoreBalance()"
              style="width:100%;padding:12px;border:none;border-top:1px dashed var(--gray-100);
                     background:transparent;cursor:pointer;font-size:13px;color:var(--gray-600);
@@ -376,7 +507,7 @@ function _buildBalanceHTML(allBalances) {
          </td>
        </tr>`
     : `<tr>
-         <td colspan="8" style="padding:8px 13px;font-size:11px;color:var(--gray-400);
+         <td colspan="${colCount}" style="padding:8px 13px;font-size:11px;color:var(--gray-400);
                                   font-family:var(--font-mono);text-align:right;border:none">
            All ${filtered.length} item${filtered.length !== 1 ? 's' : ''} shown
          </td>
@@ -394,6 +525,7 @@ function _buildBalanceHTML(allBalances) {
           <th style="text-align:center">Reorder At</th>
           <th>Status</th>
           <th>Updated</th>
+          ${admin ? '<th></th>' : ''}
         </tr>
       </thead>
       <tbody>
@@ -401,6 +533,25 @@ function _buildBalanceHTML(allBalances) {
         ${loadMoreRow}
       </tbody>
     </table>`;
+}
+
+async function deleteWarehouseProductItem(productId) {
+  if (!requireAdmin('delete warehouse items')) return;
+  const product = getWarehouseProductsLocal().find(p => p.id === productId);
+  if (!product) return;
+  if (!confirm(`Delete item "${product.name}"? This removes it from the catalog for every warehouse and cannot be undone.`)) return;
+  try {
+    await window.LumodaSupabase.deleteWarehouseProduct(productId);
+    if (typeof addAudit === 'function') addAudit('Warehouse Item Deleted', `${whCurrentUserName()} deleted item ${product.name} (${product.code})`);
+    toast('Item deleted');
+    await renderWarehouse();
+  } catch (error) {
+    console.error('Delete warehouse item failed:', error);
+    const msg = error?.code === '23503'
+      ? 'Can\'t delete — this item still has movement or requisition history.'
+      : (error.message || 'Could not delete item');
+    toast(msg, 'error');
+  }
 }
 
 // ============================================================
@@ -415,9 +566,11 @@ async function renderWarehouse() {
 
   await syncWarehouseCacheFromServer();
 
-  const movements     = getWarehouseMovementsLocal();
-  const balances      = getWarehouseBalancesLocal();
+  const movements     = getScopedWarehouseMovements();
+  const balances      = getScopedWarehouseBalances();
   const filteredMoves = getFilteredWarehouseMovements(movements);
+  const warehouseList = getWarehousesLocal().filter(w => w.active);
+  const showWarehouseSwitcher = isAdmin() || warehouseList.length > 1;
 
   const today = new Date().toDateString();
 
@@ -435,24 +588,51 @@ async function renderWarehouse() {
 
   body.innerHTML = `
 
+    ${showWarehouseSwitcher ? `
+    <!-- WAREHOUSE SWITCHER -->
+    <div id="wh-switcher-bar" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:9px 12px;background:var(--gray-50);border:1px solid var(--gray-100);border-radius:var(--radius-lg)">
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="var(--brand-brown)" style="flex-shrink:0"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>
+      <span style="font-size:10px;color:var(--gray-400);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.07em;flex-shrink:0">Warehouse</span>
+      <select class="form-select" style="width:auto;min-width:160px;max-width:220px" onchange="switchWarehouse(this.value)">
+        ${isAdmin() ? `<option value="all" ${currentWarehouseId === 'all' ? 'selected' : ''}>All Warehouses</option>` : ''}
+        ${warehouseList.map(w => `<option value="${escAttr(w.id)}" ${currentWarehouseId === w.id ? 'selected' : ''}>${escapeHtml(w.name)}</option>`).join('')}
+      </select>
+      ${currentWarehouseId === 'all'
+        ? '<span style="font-size:11px;color:var(--gray-400)">Viewing all — pick one warehouse to record Stock In/Out/Adjustments</span>'
+        : ''}
+    </div>
+    ` : ''}
+
     <!-- STAT CARDS -->
     <div class="stats-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:18px">
       <div class="stat-card">
-        <div class="stat-label">Warehouse Items</div>
+        <div class="stat-label">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>
+          Warehouse Items
+        </div>
         <div class="stat-value">${balances.length}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Low Stock</div>
+        <div class="stat-label">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;margin-right:4px"><path d="M8.94 1.5a1.5 1.5 0 0 0-1.88 0L.72 13a1.5 1.5 0 0 0 1.31 2.25h11.94A1.5 1.5 0 0 0 15.28 13L8.94 1.5zM8 5.5c.41 0 .75.34.72.75l-.25 4a.47.47 0 0 1-.94 0l-.25-4A.75.75 0 0 1 8 5.5zm0 7a.9.9 0 1 1 0-1.8.9.9 0 0 1 0 1.8z"/></svg>
+          Low Stock
+        </div>
         <div class="stat-value" style="color:${lowStockItems.length > 0 ? '#dc2626' : 'inherit'}">${lowStockItems.length}</div>
         <div class="stat-delta ${lowStockItems.length > 0 ? 'down' : ''}">${lowStockItems.length > 0 ? 'needs attention' : 'all good ✓'}</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Stock In Today</div>
+        <div class="stat-label">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><path d="M8 2v9M4.5 7.5 8 11l3.5-3.5M3 14h10"/></svg>
+          Stock In Today
+        </div>
         <div class="stat-value">${stockInToday}</div>
         <div class="stat-delta">cartons received</div>
       </div>
       <div class="stat-card">
-        <div class="stat-label">Stock Out Today</div>
+        <div class="stat-label">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:4px"><path d="M8 11V2M4.5 5.5 8 2l3.5 3.5M3 14h10"/></svg>
+          Stock Out Today
+        </div>
         <div class="stat-value">${stockOutToday}</div>
         <div class="stat-delta">cartons issued</div>
       </div>
@@ -551,7 +731,7 @@ async function renderWarehouse() {
                 ? filteredMoves.slice(0, 50).map(m => `
                   <tr>
                     <td class="mono" style="font-size:11px">${whDate(m.createdAt)}</td>
-                    <td><span class="badge badge-neutral">${formatWarehouseType(m.type)}</span></td>
+                    <td><span class="badge ${warehouseTypeBadgeClass(m.type)}">${escapeHtml(formatWarehouseType(m.type))}</span></td>
                     <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                       ${escapeHtml(m.description || m.requisitionNo || '—')}
                     </td>
@@ -575,9 +755,179 @@ async function renderWarehouse() {
 }
 
 // ============================================================
+// WAREHOUSE LOCATIONS (admin) — add/edit warehouses, assign staff
+// ============================================================
+let editingWarehouseId = null;
+
+// getUsers()/lumoda_users is a local-only-mode cache that's never kept in
+// sync with real Supabase accounts (only the Users admin page fetches live
+// profiles, and only to render its own table) — reading it here showed
+// stale/empty staff data. Fetch live profiles from Supabase instead.
+async function getLiveStaffAccounts() {
+  if (!window.LumodaSupabase?.isConfigured?.()) return [];
+  try {
+    const profiles = await window.LumodaSupabase.loadProfiles();
+    return profiles.map(p => ({ id: p.id, fullName: p.full_name, username: p.username, role: p.role, active: p.active !== false }));
+  } catch (error) {
+    console.warn('Could not load staff accounts', error);
+    return [];
+  }
+}
+
+async function renderWarehousesPage() {
+  const body = document.getElementById('warehouses-body');
+  if (!body) return;
+  await syncWarehouseCacheFromServer();
+
+  const warehouses = getWarehousesLocal();
+  const assignments = (await window.LumodaSupabase?.loadWarehouseStaffAssignments?.().catch(() => [])) || [];
+  const users = (await getLiveStaffAccounts()).filter(u => u.role === 'warehouse_manager' || u.role === 'admin');
+  const balances  = getWarehouseBalancesLocal();
+  const movements = getWarehouseMovementsLocal();
+
+  body.innerHTML = warehouses.map(w => {
+    const assignedIds = assignments.filter(a => a.warehouse_id === w.id).map(a => a.profile_id);
+    const staffPills = users
+      .filter(u => u.role === 'admin' || assignedIds.includes(u.id))
+      .map(u => u.role === 'admin'
+        ? `<span class="badge badge-info" style="margin:1px">${escapeHtml(u.fullName)} · admin</span>`
+        : `<span class="badge badge-neutral" style="margin:1px">${escapeHtml(u.fullName)}</span>`
+      ).join(' ');
+    // A warehouse can only be deleted once it's never held stock or moved
+    // anything — the database itself enforces this (foreign keys block the
+    // delete), this is just so the button reflects that upfront.
+    const isEmpty = !balances.some(b => b.warehouseId === w.id) && !movements.some(m => m.warehouseId === w.id);
+    return `
+      <tr>
+        <td class="mono">${escapeHtml(w.code)}</td>
+        <td style="font-weight:500">${escapeHtml(w.name)}</td>
+        <td style="color:var(--gray-400)">${escapeHtml(w.address || '—')}</td>
+        <td>${w.active ? '<span class="badge badge-success">Active</span>' : '<span class="badge badge-neutral">Inactive</span>'}</td>
+        <td>${staffPills || '<span style="color:var(--gray-400);font-size:12px">None yet</span>'}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-secondary btn-sm" onclick="openWarehouseLocationModal('${w.id}')">Edit</button>
+          <button class="btn btn-secondary btn-sm" onclick="openWarehouseStaffModal('${w.id}')">Assign Staff</button>
+          <button class="btn btn-secondary btn-sm" ${isEmpty ? `onclick="deleteWarehouseLocation('${w.id}')"` : 'disabled'} title="${isEmpty ? 'Delete this warehouse' : 'Only warehouses with no stock or movement history can be deleted — deactivate it instead'}" style="${isEmpty ? 'color:#991b1b' : 'opacity:.5;cursor:not-allowed'}">Delete</button>
+        </td>
+      </tr>`;
+  }).join('') || `<tr><td colspan="6" style="text-align:center;color:var(--gray-400);padding:24px">No warehouses yet.</td></tr>`;
+}
+
+async function deleteWarehouseLocation(id) {
+  const w = getWarehousesLocal().find(x => x.id === id);
+  if (!w) return;
+  if (!confirm(`Delete warehouse "${w.name}"? This cannot be undone.`)) return;
+  try {
+    await window.LumodaSupabase.deleteWarehouse(id);
+    if (typeof addAudit === 'function') addAudit('Warehouse Deleted', `${whCurrentUserName()} deleted warehouse ${w.name} (${w.code})`);
+    toast('Warehouse deleted');
+    await renderWarehousesPage();
+  } catch (error) {
+    console.error('Delete warehouse failed:', error);
+    const msg = error?.code === '23503'
+      ? 'Can\'t delete — this warehouse still has stock or movement history. Deactivate it instead.'
+      : (error.message || 'Could not delete warehouse');
+    toast(msg, 'error');
+  }
+}
+
+function openWarehouseLocationModal(id) {
+  editingWarehouseId = id || null;
+  const w = id ? getWarehousesLocal().find(x => x.id === id) : null;
+  document.getElementById('warehouse-location-modal-title').textContent = w ? 'Edit Warehouse' : 'Add Warehouse';
+  document.getElementById('wh-loc-code').value    = w?.code    || '';
+  document.getElementById('wh-loc-name').value    = w?.name    || '';
+  document.getElementById('wh-loc-address').value = w?.address || '';
+  document.getElementById('wh-loc-active').checked = w ? !!w.active : true;
+  document.getElementById('wh-loc-error').style.display = 'none';
+  openModal('warehouse-location-modal');
+}
+
+async function saveWarehouseLocation() {
+  const code    = document.getElementById('wh-loc-code').value.trim().toUpperCase();
+  const name    = document.getElementById('wh-loc-name').value.trim();
+  const address = document.getElementById('wh-loc-address').value.trim();
+  const active  = document.getElementById('wh-loc-active').checked;
+  const errEl   = document.getElementById('wh-loc-error');
+  if (!code || !name) {
+    errEl.textContent = 'Code and name are required.';
+    errEl.style.display = 'block';
+    return;
+  }
+  try {
+    await window.LumodaSupabase.saveWarehouse({ id: editingWarehouseId, code, name, address, active });
+    if (typeof addAudit === 'function') addAudit('Warehouse Saved', `${whCurrentUserName()} ${editingWarehouseId ? 'edited' : 'added'} warehouse ${name} (${code})`);
+    closeModal('warehouse-location-modal');
+    toast('Warehouse saved');
+    await renderWarehousesPage();
+  } catch (error) {
+    console.error('Save warehouse failed:', error);
+    errEl.textContent = error.message || 'Could not save warehouse';
+    errEl.style.display = 'block';
+  }
+}
+
+let assigningWarehouseId = null;
+
+async function openWarehouseStaffModal(warehouseId) {
+  assigningWarehouseId = warehouseId;
+  const w = getWarehousesLocal().find(x => x.id === warehouseId);
+  document.getElementById('warehouse-staff-modal-title').textContent = 'Assign Staff — ' + (w?.name || '');
+  await renderWarehouseStaffList();
+  openModal('warehouse-staff-modal');
+}
+
+async function renderWarehouseStaffList() {
+  const container = document.getElementById('warehouse-staff-list');
+  if (!container) return;
+  const assignments = (await window.LumodaSupabase?.loadWarehouseStaffAssignments?.().catch(() => [])) || [];
+  const assignedIds = assignments.filter(a => a.warehouse_id === assigningWarehouseId).map(a => a.profile_id);
+  const managers = (await getLiveStaffAccounts()).filter(u => u.role === 'warehouse_manager' && u.active);
+
+  if (!managers.length) {
+    container.innerHTML = `<div style="padding:12px;color:var(--gray-400);font-size:13px">No warehouse manager accounts yet — create one under User Management first.</div>`;
+    return;
+  }
+
+  container.innerHTML = managers.map(u => `
+    <label style="display:flex;align-items:center;gap:8px;padding:8px 0;font-size:13px;border-bottom:1px solid var(--gray-50)">
+      <input type="checkbox" style="width:14px;height:14px;margin:0"
+        ${assignedIds.includes(u.id) ? 'checked' : ''}
+        onchange="toggleWarehouseStaffAssignment('${u.id}', this.checked)">
+      ${escapeHtml(u.fullName)} <span style="color:var(--gray-400);font-family:var(--font-mono)">@${escapeHtml(u.username)}</span>
+    </label>
+  `).join('');
+}
+
+async function toggleWarehouseStaffAssignment(profileId, checked) {
+  try {
+    if (checked) {
+      await window.LumodaSupabase.assignStaffToWarehouse(profileId, assigningWarehouseId);
+    } else {
+      await window.LumodaSupabase.removeStaffFromWarehouse(profileId, assigningWarehouseId);
+    }
+    if (typeof addAudit === 'function') addAudit('Warehouse Staff Assignment', `${whCurrentUserName()} ${checked ? 'assigned' : 'removed'} staff for a warehouse`);
+    await renderWarehousesPage();
+  } catch (error) {
+    console.error('Assignment failed:', error);
+    toast(error.message || 'Could not update assignment', 'error');
+    await renderWarehouseStaffList(); // revert checkbox state on failure
+  }
+}
+
+// ============================================================
 // OPENING BALANCE / CSV
 // ============================================================
+// Every write action needs one specific target warehouse — block with a
+// clear message if the switcher is set to 'all' or nothing's selected yet.
+function requireActiveWarehouse() {
+  if (currentWarehouseId && currentWarehouseId !== 'all') return true;
+  toast('Pick a single warehouse first (top of the page) before recording stock', 'error');
+  return false;
+}
+
 function openWarehouseOpeningBalanceModal() {
+  if (!requireActiveWarehouse()) return;
   document.getElementById('wh-ob-code').value        = '';
   document.getElementById('wh-ob-description').value = '';
   document.getElementById('wh-ob-cartons').value     = '';
@@ -585,7 +935,10 @@ function openWarehouseOpeningBalanceModal() {
   openModal('warehouse-opening-modal');
 }
 
-function openWarehouseCsvModal() { openModal('warehouse-csv-modal'); }
+function openWarehouseCsvModal() {
+  if (!requireActiveWarehouse()) return;
+  openModal('warehouse-csv-modal');
+}
 
 function parseWarehouseCsv(text) {
   const lines   = text.trim().split(/\r?\n/);
@@ -621,6 +974,7 @@ async function importWarehouseCsv() {
       await window.LumodaSupabase.postWarehouseMovementDirect({
         type: 'opening_balance', description: item.description, cartons: item.cartons,
         notes: 'Warehouse CSV import', created_by_name: whCurrentUserName(),
+        warehouse_id: currentWarehouseId,
         items: [{ itemCode: whSafeCode(item.itemCode, item.description), description: item.description, cartons: item.cartons, unitPrice: item.unitPrice, reorderLevel: item.reorderLevel }]
       });
     }
@@ -646,6 +1000,7 @@ async function saveWarehouseOpeningBalance() {
     const result = await window.LumodaSupabase.postWarehouseMovementDirect({
       type: 'opening_balance', description, cartons, notes,
       created_by_name: whCurrentUserName(),
+      warehouse_id: currentWarehouseId,
       items: [{ itemCode, description, cartons }]
     });
     if (!result?.success) { toast(result?.error || 'Opening balance failed', 'error'); return; }
@@ -665,6 +1020,7 @@ async function saveWarehouseOpeningBalance() {
 let warehouseStockInItems = [];
 
 function openWarehouseStockInModal() {
+  if (!requireActiveWarehouse()) return;
   warehouseStockInItems = [];
   document.getElementById('wh-in-supplier').value = '';
   document.getElementById('wh-in-notes').value    = '';
@@ -672,7 +1028,7 @@ function openWarehouseStockInModal() {
   // Populate datalist for item search
   const list = document.getElementById('warehouse-stockin-items');
   if (list) {
-    list.innerHTML = getWarehouseBalancesLocal().map(item =>
+    list.innerHTML = getScopedWarehouseBalances().map(item =>
       `<option value="${escapeHtml(item.itemName)}">${escapeHtml(item.itemName)} (${escapeHtml(item.itemCode)})</option>`
     ).join('');
   }
@@ -705,7 +1061,10 @@ function _selectStockInItem(index, value) {
   if (!warehouseStockInItems[index]) return;
   warehouseStockInItems[index].description = value;
   const q    = value.toLowerCase().trim();
-  const item = getWarehouseBalancesLocal().find(x =>
+  // Match against the catalog-merged list (same source the datalist itself
+  // is built from), not just items that already have a balance row here —
+  // otherwise a freshly-added, never-stocked item can't be selected.
+  const item = getScopedWarehouseBalances().find(x =>
     String(x.itemName || '').toLowerCase() === q ||
     String(x.itemCode || '').toLowerCase() === q
   );
@@ -784,6 +1143,7 @@ async function saveWarehouseStockIn() {
       cartons:           totalCartons,
       notes,
       created_by_name:   whCurrentUserName(),
+      warehouse_id:      currentWarehouseId,
       items:             validItems
     });
 
@@ -808,13 +1168,14 @@ async function saveWarehouseStockIn() {
 // ADJUSTMENT
 // ============================================================
 function openWarehouseAdjustmentModal() {
+  if (!requireActiveWarehouse()) return;
   const list = document.getElementById('warehouse-adjustment-items');
   document.getElementById('wh-adjust-item').value    = '';
   document.getElementById('wh-adjust-type').value    = 'add';
   document.getElementById('wh-adjust-cartons').value = '';
   document.getElementById('wh-adjust-reason').value  = '';
   if (list) {
-    list.innerHTML = getWarehouseBalancesLocal().map(item =>
+    list.innerHTML = getScopedWarehouseBalances().map(item =>
       `<option value="${escapeHtml(item.itemName)}">${escapeHtml(item.itemName)} (${escapeHtml(item.itemCode)}) — Available: ${item.availableCartons}</option>`
     ).join('');
   }
@@ -827,7 +1188,7 @@ async function saveWarehouseAdjustment() {
   const cartons  = Number(document.getElementById('wh-adjust-cartons').value || 0);
   const reason   = document.getElementById('wh-adjust-reason').value.trim();
   if (!itemName || cartons <= 0 || !reason) { toast('Item, cartons, and reason are required', 'error'); return; }
-  const item = getWarehouseBalancesLocal().find(x => String(x.itemName || '').toLowerCase() === itemName.toLowerCase());
+  const item = getScopedWarehouseBalances().find(x => String(x.itemName || '').toLowerCase() === itemName.toLowerCase());
   if (!item) { toast('Select a valid warehouse item', 'error'); return; }
   if (type === 'remove' && cartons > Number(item.availableCartons || 0)) { toast('Cannot remove more than available stock', 'error'); return; }
   const movementType = type === 'add' ? 'stock_in' : 'stock_out';
@@ -835,6 +1196,7 @@ async function saveWarehouseAdjustment() {
     const result = await window.LumodaSupabase.postWarehouseMovementDirect({
       type: movementType, description: `Adjustment: ${item.itemName}`,
       cartons, notes: reason, created_by_name: whCurrentUserName(),
+      warehouse_id: currentWarehouseId,
       items: [{ itemCode: item.itemCode, description: item.itemName, cartons }]
     });
     if (!result?.success) { toast(result?.error || 'Adjustment failed', 'error'); return; }
@@ -855,6 +1217,7 @@ async function saveWarehouseAdjustment() {
 let warehouseRequisitionItems = [];
 
 function openWarehouseStockOutModal() {
+  if (!requireActiveWarehouse()) return;
   warehouseRequisitionItems = [];
   document.getElementById('wh-out-issue-to').value    = 'Alabar';
   document.getElementById('wh-out-storekeeper').value = whCurrentUserName();
@@ -882,7 +1245,7 @@ function selectWarehouseItem(index, value) {
   if (!warehouseRequisitionItems[index]) return;
   const q    = String(value || '').toLowerCase().trim();
   warehouseRequisitionItems[index].description = value;
-  const item = getWarehouseBalancesLocal().find(x =>
+  const item = getScopedWarehouseBalances().find(x =>
     String(x.itemName || '').toLowerCase() === q ||
     String(x.itemCode || '').toLowerCase() === q
   );
@@ -910,7 +1273,7 @@ function renderWarehouseRequisitionRows() {
           oninput="selectWarehouseItem(${index}, this.value)"
           placeholder="Search product name">
         <datalist id="warehouse-items-list-${index}">
-          ${getWarehouseBalancesLocal().map(p =>
+          ${getScopedWarehouseBalances().map(p =>
             `<option value="${escapeHtml(p.itemName)}">${escapeHtml(p.itemName)} (${escapeHtml(p.itemCode)}) — Available: ${p.availableCartons}</option>`
           ).join('')}
         </datalist>
@@ -944,7 +1307,7 @@ async function saveWarehouseStockOut() {
   if (!storekeeper || !validItems.length) { toast('Storekeeper and at least one item are required', 'error'); return; }
 
   for (const reqItem of validItems) {
-    const stockItem = getWarehouseBalancesLocal().find(x =>
+    const stockItem = getScopedWarehouseBalances().find(x =>
       String(x.itemCode || '').toLowerCase() === String(reqItem.itemCode || '').toLowerCase()
     );
     if (!stockItem) { toast(`Item not found in warehouse: ${reqItem.description}`, 'error'); return; }
@@ -967,6 +1330,7 @@ async function saveWarehouseStockOut() {
       cartons:         totalCartons,
       notes,
       created_by_name: whCurrentUserName(),
+      warehouse_id:    currentWarehouseId,
       items:           validItems
     });
 
@@ -1013,6 +1377,7 @@ function viewWarehouseReq(movementId) {
         <span style="color:var(--gray-400)">Date</span><span>${whDate(movement.createdAt)}</span>
       </div>
     </div>
+    <div style="overflow-x:auto">
     <table>
       <thead>
         <tr>
@@ -1034,6 +1399,7 @@ function viewWarehouseReq(movementId) {
         </tr>
       </tbody>
     </table>
+    </div>
     ${movement.notes ? `<div style="margin-top:14px;padding:10px;background:var(--gray-50);border-radius:var(--radius);font-size:13px"><strong>Notes:</strong> ${escapeHtml(movement.notes)}</div>` : ''}
   `;
 
@@ -1061,9 +1427,32 @@ function printWarehouseReq() {
 // ============================================================
 // PRODUCTS / SUPPLIERS BASIC SUPPORT
 // ============================================================
-async function saveWarehouseProduct(payload) {
-  if (!window.LumodaSupabase?.saveWarehouseProduct) return null;
-  return window.LumodaSupabase.saveWarehouseProduct(payload);
+function openWarehouseProductModal() {
+  // Adding an item touches the shared catalog, not a specific warehouse's
+  // stock, so unlike Stock In/Out this doesn't require one to be selected.
+  document.getElementById('wh-prod-code').value     = '';
+  document.getElementById('wh-prod-name').value     = '';
+  document.getElementById('wh-prod-category').value = '';
+  document.getElementById('wh-prod-reorder').value  = getDefaultReorderLevel();
+  openModal('warehouse-product-modal');
+}
+
+async function saveWarehouseProduct() {
+  const name = document.getElementById('wh-prod-name').value.trim();
+  if (!name) { toast('Product name is required', 'error'); return; }
+  const code     = whSafeCode(document.getElementById('wh-prod-code').value, name);
+  const category = document.getElementById('wh-prod-category').value.trim() || 'General';
+  const reorder  = Number(document.getElementById('wh-prod-reorder').value) || getDefaultReorderLevel();
+  try {
+    await window.LumodaSupabase.saveWarehouseProduct({ code, name, category, reorder });
+    if (typeof addAudit === 'function') addAudit('Warehouse Item Added', `${whCurrentUserName()} added item "${name}" (${code})`);
+    closeModal('warehouse-product-modal');
+    toast('Item added — it\'s now available in every warehouse');
+    await renderWarehouse();
+  } catch (error) {
+    console.error('Save warehouse item failed:', error);
+    toast(error.message || 'Could not save item', 'error');
+  }
 }
 async function saveWarehouseSupplier(payload) {
   if (!window.LumodaSupabase?.saveWarehouseSupplier) return null;

@@ -156,6 +156,52 @@ create table if not exists public.audit_logs (
   created_at timestamptz not null default now()
 );
 
+-- Partial-payment / cash-sale support, added directly on the live project
+-- after this file was first written. Captured here so the file matches
+-- what's actually running (baseline sync).
+alter table public.invoices
+  add column if not exists subtotal numeric(12,2) default 0,
+  add column if not exists discount numeric(12,2) default 0,
+  add column if not exists amount_paid numeric(12,2) not null default 0,
+  add column if not exists balance numeric(12,2) not null default 0,
+  add column if not exists partial_method text,
+  add column if not exists partial_momo_number text,
+  add column if not exists is_cash_sale boolean not null default false,
+  add column if not exists cash_tendered numeric(12,2);
+
+create table if not exists public.invoice_payments (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid not null references public.invoices(id) on delete cascade,
+  amount numeric(12,2) not null check (amount > 0),
+  method text,
+  momo_number text,
+  note text,
+  created_by uuid not null references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+create index if not exists invoice_payments_invoice_id_idx on public.invoice_payments(invoice_id);
+
+-- Discount / item-change requests from non-admin staff, held for admin
+-- approval instead of being applied directly (see create_invoice_no_stock
+-- and update_invoice_no_stock below).
+create table if not exists public.invoice_edit_requests (
+  id uuid primary key default gen_random_uuid(),
+  invoice_id uuid references public.invoices(id),
+  request_type text not null check (request_type in ('item_change', 'discount')),
+  requested_by uuid not null references public.profiles(id),
+  requested_at timestamptz not null default now(),
+  payload jsonb not null,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  reviewed_by uuid references public.profiles(id),
+  reviewed_at timestamptz,
+  rejection_reason text
+);
+
+create index if not exists invoice_edit_requests_pending_idx
+  on public.invoice_edit_requests (status, requested_at desc)
+  where status = 'pending';
+
 -- Warehouse schema lives in `supabase-warehouse-schema.sql` to keep it separate
 -- from the core auth, invoicing, customer, and product schema.
 
@@ -595,6 +641,9 @@ exception
 end;
 $$;
 
+-- NOTE: this replaces the original 9-param version. The live project grew it
+-- to 15 params (partial payments / cash sales / discount-approval routing)
+-- without this file being updated to match — captured here (baseline sync).
 create or replace function public.create_invoice_no_stock(
   p_customer_name text,
   p_location public.branch_location,
@@ -604,9 +653,15 @@ create or replace function public.create_invoice_no_stock(
   p_status public.invoice_status default 'pending',
   p_pay_method public.payment_method default null,
   p_momo_number text default null,
-  p_notes text default null
+  p_notes text default null,
+  p_amount_paid numeric default 0,
+  p_discount numeric default 0,
+  p_partial_method text default null,
+  p_partial_momo text default null,
+  p_is_cash_sale boolean default false,
+  p_cash_tendered numeric default null
 )
-returns uuid
+returns jsonb
 language plpgsql
 security definer
 set search_path = public
@@ -615,44 +670,60 @@ declare
   v_user uuid := auth.uid();
   v_role public.user_role;
   v_user_location public.branch_location;
-  v_customer_id uuid;
   v_invoice_id uuid;
+  v_number text;
+  v_customer_id uuid;
+  v_subtotal numeric(12,2) := 0;
   v_total numeric(12,2) := 0;
+  v_effective_paid numeric(12,2) := 0;
   v_item jsonb;
-  v_product public.products%rowtype;
   v_product_id uuid;
-  v_qty integer;
-  v_price numeric(12,2);
+  v_item_name text;
+  v_item_qty integer;
+  v_item_price numeric(12,2);
   v_sale_type text;
-  v_item_total numeric(12,2);
 begin
-  if v_user is null then
-    raise exception 'Not authenticated';
-  end if;
+  if v_user is null then raise exception 'Not authenticated'; end if;
 
-  select role, location
-    into v_role, v_user_location
+  select role, location into v_role, v_user_location
   from public.profiles
   where id = v_user and active = true;
 
-  if not found then
-    raise exception 'Active profile not found';
-  end if;
+  if not found then raise exception 'Active profile not found'; end if;
+  if p_location not in ('Alabar', 'Morocco') then raise exception 'Invalid invoice location'; end if;
+  if v_role <> 'admin' and p_location <> v_user_location then raise exception 'You cannot create invoices for this branch'; end if;
+  if length(trim(coalesce(p_customer_name, ''))) = 0 then raise exception 'Customer name is required'; end if;
+  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then raise exception 'Invoice requires at least one item'; end if;
+  if p_status = 'paid' and p_pay_method is null then raise exception 'Payment method is required for paid invoices'; end if;
 
-  if p_location not in ('Alabar', 'Morocco') then
-    raise exception 'Invalid invoice location';
-  end if;
-
-  if v_role <> 'admin' and p_location <> v_user_location then
-    raise exception 'You cannot create invoices for this branch';
-  end if;
-
-  if length(trim(coalesce(p_customer_name, ''))) = 0 then
-    raise exception 'Customer name is required';
-  end if;
-
-  if p_status = 'paid' and p_pay_method is null then
-    raise exception 'Payment method is required for paid invoices';
+  -- Any discount from a non-admin is held for approval instead of applied.
+  -- Nothing is created yet — the customer record, invoice, and items are
+  -- only produced once an admin approves the request (approve_invoice_request).
+  if v_role <> 'admin' and coalesce(p_discount, 0) > 0 then
+    insert into public.invoice_edit_requests (invoice_id, request_type, requested_by, payload)
+    values (
+      null,
+      'discount',
+      v_user,
+      jsonb_build_object(
+        'p_customer_name', p_customer_name,
+        'p_location', p_location,
+        'p_items', p_items,
+        'p_customer_phone', p_customer_phone,
+        'p_customer_address', p_customer_address,
+        'p_status', p_status,
+        'p_pay_method', p_pay_method,
+        'p_momo_number', p_momo_number,
+        'p_notes', p_notes,
+        'p_amount_paid', p_amount_paid,
+        'p_discount', p_discount,
+        'p_partial_method', p_partial_method,
+        'p_partial_momo', p_partial_momo,
+        'p_is_cash_sale', p_is_cash_sale,
+        'p_cash_tendered', p_cash_tendered
+      )
+    );
+    return jsonb_build_object('success', true, 'discount_pending_approval', true);
   end if;
 
   if p_status <> 'paid' then
@@ -660,12 +731,7 @@ begin
     p_momo_number := null;
   end if;
 
-  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
-    raise exception 'Invoice requires at least one item';
-  end if;
-
-  select id
-    into v_customer_id
+  select id into v_customer_id
   from public.customers
   where lower(name) = lower(trim(p_customer_name))
     and location = p_location
@@ -674,90 +740,424 @@ begin
 
   if v_customer_id is null then
     insert into public.customers (name, phone, address, location, created_by)
-    values (trim(p_customer_name), nullif(trim(coalesce(p_customer_phone, '')), ''), nullif(trim(coalesce(p_customer_address, '')), ''), p_location, v_user)
-    returning id into v_customer_id;
+    values (
+      trim(p_customer_name),
+      nullif(trim(coalesce(p_customer_phone, '')), ''),
+      nullif(trim(coalesce(p_customer_address, '')), ''),
+      p_location,
+      v_user
+    ) returning id into v_customer_id;
+  else
+    update public.customers
+    set phone = coalesce(nullif(trim(coalesce(p_customer_phone, '')), ''), phone),
+        address = coalesce(nullif(trim(coalesce(p_customer_address, '')), ''), address)
+    where id = v_customer_id;
   end if;
 
+  for v_item in select * from jsonb_array_elements(p_items)
+  loop
+    v_item_name := trim(coalesce(v_item->>'name', ''));
+    v_item_qty := coalesce(nullif(v_item->>'qty', '')::integer, 0);
+    v_item_price := coalesce(nullif(v_item->>'price', '')::numeric, 0);
+
+    if v_item_name = '' then raise exception 'Item name is required'; end if;
+    if v_item_qty < 1 then raise exception 'Quantity must be greater than zero'; end if;
+    if v_item_price < 0 then raise exception 'Price cannot be negative'; end if;
+
+    v_subtotal := v_subtotal + (v_item_qty * v_item_price);
+  end loop;
+
+  if v_subtotal <= 0 then raise exception 'Invoice total must be greater than zero'; end if;
+
+  v_total := greatest(v_subtotal - coalesce(p_discount, 0), 0);
+
+  v_effective_paid := case
+    when p_status = 'paid' then v_total
+    when p_status = 'partial' then least(greatest(coalesce(p_amount_paid, 0), 0), v_total)
+    else 0
+  end;
+
   insert into public.invoices (
-    customer_id,
-    customer_name,
-    customer_phone,
-    customer_address,
-    location,
-    total,
-    status,
-    pay_method,
-    momo_number,
-    notes,
-    created_by
-  )
-  values (
+    customer_id, customer_name, customer_phone, customer_address,
+    location, subtotal, discount, total, status, pay_method, momo_number, notes,
+    amount_paid, balance, partial_method, partial_momo_number, is_cash_sale, cash_tendered, created_by
+  ) values (
     v_customer_id,
     trim(p_customer_name),
     nullif(trim(coalesce(p_customer_phone, '')), ''),
     nullif(trim(coalesce(p_customer_address, '')), ''),
     p_location,
-    0,
+    v_subtotal,
+    coalesce(p_discount, 0),
+    v_total,
     p_status,
     p_pay_method,
     nullif(trim(coalesce(p_momo_number, '')), ''),
     nullif(trim(coalesce(p_notes, '')), ''),
+    v_effective_paid,
+    greatest(v_total - v_effective_paid, 0),
+    p_partial_method,
+    nullif(trim(coalesce(p_partial_momo, '')), ''),
+    coalesce(p_is_cash_sale, false),
+    p_cash_tendered,
     v_user
-  )
-  returning id into v_invoice_id;
+  ) returning id, number into v_invoice_id, v_number;
 
   for v_item in select * from jsonb_array_elements(p_items)
   loop
-    v_product_id := nullif(v_item->>'product_id', '')::uuid;
-    v_qty := coalesce((v_item->>'qty')::integer, 0);
+    v_item_name := trim(coalesce(v_item->>'name', ''));
+    v_item_qty := coalesce(nullif(v_item->>'qty', '')::integer, 0);
+    v_item_price := coalesce(nullif(v_item->>'price', '')::numeric, 0);
     v_sale_type := coalesce(nullif(v_item->>'sale_type', ''), nullif(v_item->>'priceType', ''), 'retail');
+    v_product_id := null;
 
-    if v_qty < 1 then
-      raise exception 'Quantity must be greater than zero';
+    if nullif(v_item->>'product_id', '') is not null and v_item->>'product_id' <> 'null' then
+      select id into v_product_id
+      from public.products
+      where id = (v_item->>'product_id')::uuid
+      limit 1;
     end if;
 
-    if v_sale_type not in ('retail', 'wholesale', 'carton') then
-      raise exception 'Invalid sale type';
+    if v_product_id is null then
+      select id into v_product_id
+      from public.products
+      where lower(name) = lower(v_item_name)
+      limit 1;
     end if;
-
-    select *
-      into v_product
-    from public.products
-    where (v_product_id is not null and id = v_product_id)
-       or (v_product_id is null and lower(name) = lower(trim(coalesce(v_item->>'name', ''))))
-    order by case when v_product_id is not null and id = v_product_id then 0 else 1 end
-    limit 1;
-
-    if not found then
-      raise exception 'Product not found';
-    end if;
-
-    v_price := coalesce(nullif(v_item->>'price', '')::numeric,
-      case
-        when v_sale_type = 'wholesale' then nullif(v_product.wholesale_price, 0)
-        when v_sale_type = 'carton' then nullif(v_product.carton_price, 0)
-        else nullif(v_product.retail_price, 0)
-      end,
-      v_product.price);
-
-    v_item_total := v_price * v_qty;
-    v_total := v_total + v_item_total;
 
     insert into public.invoice_items (invoice_id, product_id, name, sale_type, qty, price)
-    values (v_invoice_id, v_product.id, v_product.name, v_sale_type, v_qty, v_price);
+    values (v_invoice_id, v_product_id, v_item_name, v_sale_type, v_item_qty, v_item_price);
   end loop;
 
-  update public.invoices
-  set total = v_total
-  where id = v_invoice_id;
+  if v_effective_paid > 0 then
+    insert into public.invoice_payments (invoice_id, amount, method, momo_number, note, created_by)
+    values (
+      v_invoice_id,
+      v_effective_paid,
+      coalesce(p_pay_method::text, p_partial_method),
+      coalesce(p_momo_number, p_partial_momo),
+      'Initial payment',
+      v_user
+    );
+  end if;
 
   insert into public.audit_logs (action, detail, created_by)
-  values ('Invoice Created (no stock)', 'Invoice ' || (select number from public.invoices where id = v_invoice_id) || ' created for ' || trim(p_customer_name), v_user);
+  values ('Invoice Created', 'Invoice ' || v_number || ' created for ' || trim(p_customer_name), v_user);
 
-  return v_invoice_id;
-exception
-  when invalid_text_representation then
-    raise exception 'Invalid invoice item product id';
+  return jsonb_build_object(
+    'invoice_id', v_invoice_id,
+    'number', v_number,
+    'subtotal', v_subtotal,
+    'discount', coalesce(p_discount, 0),
+    'total', v_total,
+    'paid', v_effective_paid,
+    'balance', greatest(v_total - v_effective_paid, 0)
+  );
+end;
+$$;
+
+-- Edits an existing invoice. Item-quantity *reductions* from a non-admin are
+-- held for approval (invoice_edit_requests) rather than applied immediately;
+-- everything else (status/payment/notes/customer details, or any change from
+-- an admin) applies right away.
+create or replace function public.update_invoice_no_stock(
+  p_invoice_id uuid,
+  p_customer_name text default null,
+  p_customer_phone text default null,
+  p_customer_address text default null,
+  p_status text default null,
+  p_pay_method text default null,
+  p_momo_number text default null,
+  p_notes text default null,
+  p_subtotal numeric default null,
+  p_total numeric default null,
+  p_items jsonb default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_role public.user_role;
+  v_user_location public.branch_location;
+  v_invoice_location public.branch_location;
+  v_invoice_status public.invoice_status;
+  v_invoice jsonb;
+  v_items jsonb;
+  v_current_key text;
+  v_current_qty integer;
+  v_proposed_qty integer;
+  v_needs_approval boolean := false;
+begin
+  if v_user is null then raise exception 'Not authenticated'; end if;
+
+  select role, location into v_role, v_user_location
+  from public.profiles
+  where id = v_user and active = true;
+
+  if not found then raise exception 'Active profile not found'; end if;
+
+  select location, status into v_invoice_location, v_invoice_status
+  from public.invoices
+  where id = p_invoice_id and deleted = false;
+
+  if not found then raise exception 'Invoice not found'; end if;
+  if v_role <> 'admin' and v_invoice_location <> v_user_location then
+    raise exception 'You cannot edit invoices for this branch';
+  end if;
+
+  if p_items is not null and jsonb_array_length(p_items) > 0
+     and v_invoice_status in ('paid', 'partial') and v_role <> 'admin' then
+    raise exception 'This invoice is already paid or partially paid — ask an admin to make item changes';
+  end if;
+
+  if p_items is not null and jsonb_array_length(p_items) > 0 and v_role <> 'admin' then
+    for v_current_key, v_current_qty in
+      select coalesce(name,'') || '|' || coalesce(sale_type,'retail'), sum(qty)::integer
+      from public.invoice_items
+      where invoice_id = p_invoice_id
+      group by 1
+    loop
+      select coalesce(sum((item->>'qty')::integer), 0) into v_proposed_qty
+      from jsonb_array_elements(p_items) as item
+      where coalesce(item->>'name','') || '|' || coalesce(nullif(item->>'sale_type',''), 'retail') = v_current_key;
+
+      if v_proposed_qty < v_current_qty then
+        v_needs_approval := true;
+        exit;
+      end if;
+    end loop;
+
+    if v_needs_approval then
+      insert into public.invoice_edit_requests (invoice_id, request_type, requested_by, payload)
+      values (
+        p_invoice_id,
+        'item_change',
+        v_user,
+        jsonb_build_object(
+          'p_invoice_id', p_invoice_id,
+          'p_customer_name', p_customer_name,
+          'p_customer_phone', p_customer_phone,
+          'p_customer_address', p_customer_address,
+          'p_status', p_status,
+          'p_pay_method', p_pay_method,
+          'p_momo_number', p_momo_number,
+          'p_notes', p_notes,
+          'p_subtotal', p_subtotal,
+          'p_total', p_total,
+          'p_items', p_items
+        )
+      );
+      return jsonb_build_object('success', true, 'items_pending_approval', true);
+    end if;
+  end if;
+
+  update invoices set
+    customer_name    = coalesce(p_customer_name,    customer_name),
+    customer_phone   = coalesce(p_customer_phone,   customer_phone),
+    customer_address = coalesce(p_customer_address, customer_address),
+    status           = case when p_status is not null then p_status::invoice_status else status end,
+    pay_method       = case
+                         when p_status = 'paid' and p_pay_method is not null then p_pay_method::payment_method
+                         when p_status = 'paid' and p_pay_method is null then null
+                         else pay_method
+                       end,
+    momo_number      = case when p_status = 'paid' then p_momo_number else momo_number end,
+    notes            = coalesce(p_notes,    notes),
+    subtotal         = coalesce(p_subtotal, subtotal),
+    total            = coalesce(p_total,    total),
+    updated_at       = now()
+  where id = p_invoice_id;
+
+  if p_items is not null and jsonb_array_length(p_items) > 0 then
+    delete from invoice_items where invoice_id = p_invoice_id;
+    insert into invoice_items (invoice_id, name, qty, price, sale_type)
+    select
+      p_invoice_id,
+      (item->>'name')::text,
+      (item->>'qty')::integer,
+      (item->>'price')::numeric,
+      coalesce(nullif(item->>'sale_type', ''), 'retail')
+    from jsonb_array_elements(p_items) as item
+    where (item->>'name') is not null and (item->>'name') <> '';
+  end if;
+
+  select row_to_json(i)::jsonb into v_invoice from invoices i where i.id = p_invoice_id;
+  select jsonb_agg(row_to_json(ii)) into v_items from invoice_items ii where ii.invoice_id = p_invoice_id;
+
+  return jsonb_build_object('invoice', v_invoice, 'items', coalesce(v_items, '[]'::jsonb), 'success', true);
+end;
+$$;
+
+create or replace function public.record_login()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.profiles
+  set last_login = now()
+  where id = auth.uid();
+end;
+$$;
+
+create or replace function public.record_partial_payment(
+  p_invoice_id uuid,
+  p_amount numeric,
+  p_method text default null,
+  p_momo_number text default null,
+  p_note text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_invoice public.invoices%rowtype;
+  v_new_paid numeric(12,2);
+  v_new_balance numeric(12,2);
+  v_new_status public.invoice_status;
+begin
+  if v_user is null then raise exception 'Not authenticated'; end if;
+  if p_amount <= 0 then raise exception 'Payment amount must be greater than zero'; end if;
+
+  select * into v_invoice
+  from public.invoices
+  where id = p_invoice_id and deleted = false
+  for update;
+
+  if not found then raise exception 'Invoice not found'; end if;
+  if not public.can_access_location(v_invoice.location) then raise exception 'Access denied'; end if;
+
+  v_new_paid := least(coalesce(v_invoice.amount_paid, 0) + p_amount, v_invoice.total);
+  v_new_balance := greatest(v_invoice.total - v_new_paid, 0);
+  v_new_status := case when v_new_balance = 0 then 'paid'::public.invoice_status else 'partial'::public.invoice_status end;
+
+  insert into public.invoice_payments (invoice_id, amount, method, momo_number, note, created_by)
+  values (p_invoice_id, p_amount, p_method, nullif(trim(coalesce(p_momo_number, '')), ''), nullif(trim(coalesce(p_note, '')), ''), v_user);
+
+  update public.invoices
+  set amount_paid = v_new_paid,
+      balance = v_new_balance,
+      status = v_new_status,
+      partial_method = p_method,
+      partial_momo_number = nullif(trim(coalesce(p_momo_number, '')), '')
+  where id = p_invoice_id;
+
+  return jsonb_build_object(
+    'new_paid', v_new_paid,
+    'new_balance', v_new_balance,
+    'new_status', v_new_status
+  );
+end;
+$$;
+
+create or replace function public.approve_invoice_request(p_request_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_role public.user_role;
+  v_request public.invoice_edit_requests%rowtype;
+  v_result jsonb;
+begin
+  if v_user is null then raise exception 'Not authenticated'; end if;
+
+  select role into v_role from public.profiles where id = v_user and active = true;
+  if not found or v_role <> 'admin' then
+    raise exception 'Only an admin can approve requests';
+  end if;
+
+  select * into v_request from public.invoice_edit_requests where id = p_request_id for update;
+  if not found then raise exception 'Request not found'; end if;
+  if v_request.status <> 'pending' then raise exception 'Request has already been reviewed'; end if;
+
+  if v_request.request_type = 'discount' then
+    select public.create_invoice_no_stock(
+      p_customer_name    => v_request.payload->>'p_customer_name',
+      p_location         => (v_request.payload->>'p_location')::public.branch_location,
+      p_items            => v_request.payload->'p_items',
+      p_customer_phone   => v_request.payload->>'p_customer_phone',
+      p_customer_address => v_request.payload->>'p_customer_address',
+      p_status           => coalesce((v_request.payload->>'p_status')::public.invoice_status, 'pending'),
+      p_pay_method       => nullif(v_request.payload->>'p_pay_method','')::public.payment_method,
+      p_momo_number      => v_request.payload->>'p_momo_number',
+      p_notes            => v_request.payload->>'p_notes',
+      p_amount_paid      => coalesce((v_request.payload->>'p_amount_paid')::numeric, 0),
+      p_discount         => coalesce((v_request.payload->>'p_discount')::numeric, 0),
+      p_partial_method   => v_request.payload->>'p_partial_method',
+      p_partial_momo     => v_request.payload->>'p_partial_momo',
+      p_is_cash_sale     => coalesce((v_request.payload->>'p_is_cash_sale')::boolean, false),
+      p_cash_tendered    => nullif(v_request.payload->>'p_cash_tendered','')::numeric
+    ) into v_result;
+
+  elsif v_request.request_type = 'item_change' then
+    select public.update_invoice_no_stock(
+      p_invoice_id       => v_request.invoice_id,
+      p_customer_name    => v_request.payload->>'p_customer_name',
+      p_customer_phone   => v_request.payload->>'p_customer_phone',
+      p_customer_address => v_request.payload->>'p_customer_address',
+      p_status           => v_request.payload->>'p_status',
+      p_pay_method       => v_request.payload->>'p_pay_method',
+      p_momo_number      => v_request.payload->>'p_momo_number',
+      p_notes            => v_request.payload->>'p_notes',
+      p_subtotal         => nullif(v_request.payload->>'p_subtotal','')::numeric,
+      p_total            => nullif(v_request.payload->>'p_total','')::numeric,
+      p_items            => v_request.payload->'p_items'
+    ) into v_result;
+  else
+    raise exception 'Unknown request type';
+  end if;
+
+  update public.invoice_edit_requests
+  set status = 'approved', reviewed_by = v_user, reviewed_at = now()
+  where id = p_request_id;
+
+  insert into public.audit_logs (action, detail, created_by)
+  values ('Invoice Request Approved', v_request.request_type || ' request approved', v_user);
+
+  return v_result;
+end;
+$$;
+
+create or replace function public.reject_invoice_request(p_request_id uuid, p_reason text default null)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_role public.user_role;
+  v_request public.invoice_edit_requests%rowtype;
+begin
+  if v_user is null then raise exception 'Not authenticated'; end if;
+
+  select role into v_role from public.profiles where id = v_user and active = true;
+  if not found or v_role <> 'admin' then
+    raise exception 'Only an admin can reject requests';
+  end if;
+
+  select * into v_request from public.invoice_edit_requests where id = p_request_id for update;
+  if not found then raise exception 'Request not found'; end if;
+  if v_request.status <> 'pending' then raise exception 'Request has already been reviewed'; end if;
+
+  update public.invoice_edit_requests
+  set status = 'rejected', reviewed_by = v_user, reviewed_at = now(), rejection_reason = p_reason
+  where id = p_request_id;
+
+  insert into public.audit_logs (action, detail, created_by)
+  values ('Invoice Request Rejected', v_request.request_type || ' request rejected' || coalesce(': ' || p_reason, ''), v_user);
+
+  return jsonb_build_object('success', true);
 end;
 $$;
 
@@ -979,6 +1379,80 @@ from public.invoices
 where deleted = false
 group by location, date_trunc('day', created_at);
 
+create or replace view public.outstanding_balances
+with (security_invoker = true)
+as
+select id, number, customer_name, customer_phone, location, total, amount_paid, balance, created_at
+from public.invoices
+where deleted = false and balance > 0;
+
+create or replace view public.product_sales_summary
+with (security_invoker = true)
+as
+select
+  ii.name as product_name,
+  ii.product_id,
+  i.location,
+  date_trunc('day', i.created_at) as sale_day,
+  date_trunc('week', i.created_at) as sale_week,
+  date_trunc('month', i.created_at) as sale_month,
+  sum(ii.qty) as qty_sold,
+  ii.price as unit_price,
+  sum(ii.qty::numeric * ii.price) as revenue
+from public.invoice_items ii
+join public.invoices i on i.id = ii.invoice_id
+where i.deleted = false
+group by ii.name, ii.product_id, i.location, date_trunc('day', i.created_at), date_trunc('week', i.created_at), date_trunc('month', i.created_at), ii.price;
+
+drop policy if exists "invoice_payments_select" on public.invoice_payments;
+create policy "invoice_payments_select"
+on public.invoice_payments for select
+to authenticated
+using (
+  exists (
+    select 1 from public.invoices i
+    where i.id = invoice_payments.invoice_id
+      and public.can_access_location(i.location)
+      and (i.deleted = false or public.is_admin())
+      and (public.is_admin() or i.created_by = (select auth.uid()))
+  )
+);
+
+drop policy if exists "invoice_payments_insert" on public.invoice_payments;
+create policy "invoice_payments_insert"
+on public.invoice_payments for insert
+to authenticated
+with check (true);
+
+drop policy if exists "invoice_payments_update" on public.invoice_payments;
+create policy "invoice_payments_update"
+on public.invoice_payments for update
+to authenticated
+using (public.is_admin())
+with check (public.is_admin());
+
+drop policy if exists "invoice_edit_requests_select" on public.invoice_edit_requests;
+create policy "invoice_edit_requests_select"
+on public.invoice_edit_requests for select
+to authenticated
+using (public.is_admin() or requested_by = (select auth.uid()));
+
+drop policy if exists "invoice_edit_requests_insert" on public.invoice_edit_requests;
+create policy "invoice_edit_requests_insert"
+on public.invoice_edit_requests for insert
+to authenticated
+with check (requested_by = (select auth.uid()));
+
+drop policy if exists "invoice_edit_requests_update" on public.invoice_edit_requests;
+create policy "invoice_edit_requests_update"
+on public.invoice_edit_requests for update
+to authenticated
+using (public.is_admin())
+with check (public.is_admin());
+
+alter table public.invoice_payments enable row level security;
+alter table public.invoice_edit_requests enable row level security;
+
 drop policy if exists "stock_history_select_by_location" on public.stock_history;
 create policy "stock_history_select_by_location"
 on public.stock_history for select
@@ -1011,6 +1485,8 @@ grant select, update, delete on public.invoice_items to authenticated;
 grant select on public.stock_history to authenticated;
 grant select on public.audit_logs to authenticated;
 grant select, update on public.profiles to authenticated;
+grant select, insert, update on public.invoice_payments to authenticated;
+grant select, insert, update on public.invoice_edit_requests to authenticated;
 grant all on all tables in schema public to service_role;
 revoke all on sequence public.invoice_number_seq from public, anon, authenticated;
 revoke execute on function public.current_profile_role() from public;
@@ -1022,7 +1498,6 @@ revoke execute on function public.generate_product_sku(text) from public;
 revoke execute on function public.import_products(jsonb, text, text, integer, boolean) from public;
 revoke execute on function public.generate_invoice_number() from public, anon, authenticated;
 revoke execute on function public.create_invoice(text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text) from public;
-revoke execute on function public.create_invoice_no_stock(text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text) from public;
 revoke execute on function public.soft_delete_invoice(uuid) from public;
 revoke execute on function public.soft_delete_invoice_no_stock(uuid) from public;
 grant execute on function public.current_profile_role() to authenticated;
@@ -1034,10 +1509,25 @@ grant execute on function public.generate_product_sku(text) to authenticated;
 grant execute on function public.import_products(jsonb, text, text, integer, boolean) to authenticated;
 grant execute on function public.log_audit(text, text) to authenticated;
 grant execute on function public.create_invoice(text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text) to authenticated;
-grant execute on function public.create_invoice_no_stock(text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text) to authenticated;
 grant execute on function public.soft_delete_invoice(uuid) to authenticated;
 grant execute on function public.soft_delete_invoice_no_stock(uuid) to authenticated;
 grant select on public.sales_summary to authenticated;
+grant select on public.outstanding_balances to authenticated;
+grant select on public.product_sales_summary to authenticated;
+
+-- create_invoice_no_stock / update_invoice_no_stock / record_login /
+-- approve_invoice_request / reject_invoice_request are, on the live project,
+-- also granted to `anon`/PUBLIC (Postgres's default for a newly created
+-- SECURITY DEFINER function, never explicitly revoked here). Each function
+-- still requires `auth.uid()` to resolve, which anon calls can't provide, so
+-- this isn't currently exploitable — captured as-is (baseline sync) rather
+-- than tightened, since that's a behavior change beyond "match live."
+grant execute on function public.create_invoice_no_stock(text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text, numeric, numeric, text, text, boolean, numeric) to anon, authenticated;
+grant execute on function public.update_invoice_no_stock(uuid, text, text, text, text, text, text, text, numeric, numeric, jsonb) to anon, authenticated;
+grant execute on function public.record_login() to anon, authenticated;
+grant execute on function public.record_partial_payment(uuid, numeric, text, text, text) to authenticated;
+grant execute on function public.approve_invoice_request(uuid) to anon, authenticated;
+grant execute on function public.reject_invoice_request(uuid, text) to anon, authenticated;
 
 insert into public.products (name, sku, category, price, stock_alabar, stock_morocco, reorder_level)
 values

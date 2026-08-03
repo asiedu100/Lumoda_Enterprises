@@ -57,7 +57,10 @@
     <label class="auth-label">Username</label>
     <input class="auth-input" id="auth-user" placeholder="Your username" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('auth-pass').focus()">
     <label class="auth-label">Password</label>
-    <input class="auth-input" id="auth-pass" type="password" placeholder="Your password" onkeydown="if(event.key==='Enter')doLogin()">
+    <div class="pw-field">
+      <input class="auth-input" id="auth-pass" type="password" placeholder="Your password" onkeydown="if(event.key==='Enter')doLogin()">
+      <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('auth-pass', this)" aria-label="Show password"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg></button>
+    </div>
     <label style="display:flex;align-items:center;gap:8px;margin:10px 0 6px;font-size:12px;color:var(--gray-500)"><input id="remember-login" type="checkbox" style="width:14px;height:14px;margin:0"> Keep me signed in on this device</label>
     <div class="auth-error" id="auth-error"></div>
     <button class="auth-btn" onclick="doLogin()">Sign In →</button>
@@ -85,9 +88,15 @@
       <div style="font-size:13px;color:var(--gray-400);margin-top:4px">Set your permanent password to continue</div>
     </div>
     <label class="auth-label">New Password</label>
-    <input class="auth-input" id="new-pw" type="password" placeholder="At least 6 characters" onkeydown="if(event.key==='Enter')document.getElementById('confirm-pw').focus()">
+    <div class="pw-field">
+      <input class="auth-input" id="new-pw" type="password" placeholder="At least 6 characters" onkeydown="if(event.key==='Enter')document.getElementById('confirm-pw').focus()">
+      <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('new-pw', this)" aria-label="Show password"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg></button>
+    </div>
     <label class="auth-label">Confirm Password</label>
-    <input class="auth-input" id="confirm-pw" type="password" placeholder="Repeat password" onkeydown="if(event.key==='Enter')doChangePassword()">
+    <div class="pw-field">
+      <input class="auth-input" id="confirm-pw" type="password" placeholder="Repeat password" onkeydown="if(event.key==='Enter')doChangePassword()">
+      <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('confirm-pw', this)" aria-label="Show password"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg></button>
+    </div>
     <div class="pw-hint" style="margin-top:6px">Minimum 6 characters</div>
     <div class="auth-error" id="change-pw-error"></div>
     <button class="auth-btn" onclick="doChangePassword()">Set Password &amp; Enter →</button>
@@ -161,6 +170,9 @@
     </div>
     <div class="nav-section">
       <div class="nav-lbl">Admin</div>
+      <div class="nav-item" data-page="warehouses" onclick="navigate('warehouses',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>Warehouses
+      </div>
       <div class="nav-item" data-page="users" onclick="navigate('users',this)">
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M3 14s-1 0-1-1 1-4 6-4 6 3 6 4-1 1-1 1H3zm5-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/></svg>User Management
       </div>
@@ -171,9 +183,13 @@
         <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M13.5 2.5a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h11zM7 8.3 5 6.3l-1 1L7 10.3l5-5-1-1-4 4z"/></svg>Approvals<span id="approvals-badge" class="nav-badge" style="display:none"></span>
       </div>
     </div>
+    <div class="nav-section">
+      <div class="nav-item" data-page="settings" onclick="navigate('settings',this)">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="currentColor"><path d="M8 5a3 3 0 1 0 0 6 3 3 0 0 0 0-6zm6.4 2c0 .34-.03.67-.08 1l1.6 1.25-1.5 2.6-1.9-.4c-.5.4-1.08.72-1.7.94l-.3 1.9H7.48l-.3-1.9a5.9 5.9 0 0 1-1.7-.94l-1.9.4-1.5-2.6L3.68 8A6 6 0 0 1 3.6 7c0-.34.03-.67.08-1L2.08 4.75l1.5-2.6 1.9.4c.5-.4 1.08-.72 1.7-.94l.3-1.9h1.02l.3 1.9c.62.22 1.2.54 1.7.94l1.9-.4 1.5 2.6L12.32 6c.05.33.08.66.08 1z"/></svg>Settings
+      </div>
+    </div>
     <div class="sidebar-footer">
       <div style="font-size:11px;color:rgba(255,255,255,.32);font-family:'DM Mono',monospace;margin-bottom:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="sidebar-user-info">—</div>
-      <button class="btn btn-secondary btn-sm" style="width:100%;margin-bottom:8px;color:rgba(255,255,255,.6);border-color:rgba(255,255,255,.2);background:transparent;font-size:11px" onclick="openChangeMyPassword()">🔑 Change Password</button>
       <button class="logout-btn" onclick="doLogout()">← Sign Out</button>
     </div>
   </aside>
@@ -188,7 +204,7 @@
         <div class="loc-tab" data-loc="Alabar" onclick="switchLocFilter('Alabar',this)">Alabar</div>
         <div class="loc-tab" data-loc="Morocco" onclick="switchLocFilter('Morocco',this)">Morocco</div>
       </div>
-      <div class="topbar-user" onclick="openChangeMyPassword()">
+      <div class="topbar-user" onclick="navigate('settings', document.querySelector('.nav-item[data-page=&quot;settings&quot;]'))">
         <div class="user-avatar" id="topbar-avatar">A</div>
         <div>
           <div style="font-size:13px;color:var(--black);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" id="topbar-username">—</div>
@@ -209,14 +225,14 @@
           <div class="stat-card"><div class="stat-label">Customers</div><div class="stat-value" id="stat-customers">0</div><div class="stat-delta" id="stat-customers-d">in your branch</div></div>
         </div>
         <!-- Cash vs MoMo today -->
-        <div id="dash-pm-panel" style="display:none;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div id="dash-pm-panel" class="dash-2col" style="display:none;margin-bottom:14px">
           <div class="stat-card"><div class="stat-label" id="stat-cash-label">💵 Cash Today</div><div class="stat-value" id="stat-cash">GH₵ 0</div></div>
           <div class="stat-card"><div class="stat-label" id="stat-momo-label">📱 MoMo Today</div><div class="stat-value" id="stat-momo">GH₵ 0</div></div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+        <div class="dash-2col" style="margin-bottom:12px">
           <div class="card">
             <div class="card-header"><div class="card-title">Recent Invoices</div><button class="btn btn-secondary btn-sm" onclick="navigate('invoices',null)">View All</button></div>
-            <table><thead><tr><th>Nr</th><th>Customer</th><th>Amount</th><th>Status</th></tr></thead><tbody id="dash-recent-body"></tbody></table>
+            <div style="overflow-x:auto"><table><thead><tr><th>Nr</th><th>Customer</th><th>Amount</th><th>Status</th></tr></thead><tbody id="dash-recent-body"></tbody></table></div>
           </div>
           <div class="card">
             <div class="card-header"><div class="card-title">Low Stock Alert</div><button class="btn btn-secondary btn-sm" onclick="navigate('products',null)">Manage</button></div>
@@ -265,7 +281,7 @@
             <div style="flex:1"></div>
             <button class="btn btn-primary" onclick="openCustomerModal()">+ Add Customer</button>
           </div>
-          <table><thead><tr><th>Name</th><th>Phone</th><th>Location</th><th>Invoices</th><th>Total Spent</th><th>Added</th></tr></thead><tbody id="customers-body"></tbody></table>
+          <div style="overflow-x:auto"><table><thead><tr><th>Name</th><th>Phone</th><th>Location</th><th>Invoices</th><th>Total Spent</th><th>Added</th></tr></thead><tbody id="customers-body"></tbody></table></div>
         </div>
       </div>
 
@@ -289,6 +305,9 @@
     <div class="card-header">
       <h2>Warehouse Management</h2>
       <div style="flex:1"></div>
+      <button class="btn btn-secondary" onclick="openWarehouseProductModal()">
+        + Add Item
+      </button>
       <button class="btn btn-primary" onclick="openWarehouseStockInModal()">
         + Stock In
       </button>
@@ -303,6 +322,17 @@
   </div>
 </div>
 
+      <!-- WAREHOUSES (locations, admin-only) -->
+      <div class="page" id="page-warehouses">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Warehouse Locations</div>
+            <div style="flex:1"></div>
+            <button class="btn btn-primary" onclick="openWarehouseLocationModal()">+ Add Warehouse</button>
+          </div>
+          <div style="overflow-x:auto"><table><thead><tr><th>Code</th><th>Name</th><th>Address</th><th>Status</th><th>Assigned Staff</th><th></th></tr></thead><tbody id="warehouses-body"></tbody></table></div>
+        </div>
+      </div>
 
       <!-- STOCK HISTORY -->
       <div class="page" id="page-stockhistory">
@@ -333,6 +363,25 @@
         <div class="report-grid">
           <div class="report-card"><h3>By Location</h3><div id="location-breakdown"></div></div>
           <div class="report-card"><h3>Top Products</h3><div id="top-products"></div></div>
+        </div>
+        <div class="report-grid">
+          <div class="report-card">
+            <h3 style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <span>Sales on a Day</span>
+              <input type="date" class="form-input" id="rep-day-picker" style="width:auto;font-size:12px;padding:5px 8px" onchange="renderSalesByDay()">
+            </h3>
+            <div id="sales-by-day"></div>
+          </div>
+          <div class="report-card">
+            <h3 style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <span>Top Customers</span>
+              <div style="display:flex;gap:4px" id="top-customers-sort">
+                <button class="btn btn-primary btn-sm" style="padding:3px 9px;font-size:11px" onclick="switchTopCustomersSort('spend', this)">By Spend</button>
+                <button class="btn btn-secondary btn-sm" style="padding:3px 9px;font-size:11px" onclick="switchTopCustomersSort('orders', this)">By Orders</button>
+              </div>
+            </h3>
+            <div id="top-customers"></div>
+          </div>
         </div>
         <div class="card"><div class="card-header"><div class="card-title">Monthly Sales — Last 6 Months</div></div><div style="padding:16px"><div class="chart-bars" id="monthly-chart" style="height:140px"></div></div></div>
       </div>
@@ -365,6 +414,53 @@
             <div style="font-size:12px;color:var(--gray-400)">Discount requests and item removals from staff, waiting on you</div>
           </div>
           <div id="approvals-list"></div>
+        </div>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="page" id="page-settings">
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">My Settings</div>
+          </div>
+          <div style="padding:20px;max-width:420px">
+            <div class="form-group" id="set-landing-page-group">
+              <label class="form-label">Landing page after login</label>
+              <select class="form-select" id="set-landing-page"></select>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveMyLandingPagePref()">Save</button>
+            <div style="margin-top:22px;padding-top:20px;border-top:1px solid var(--gray-100)">
+              <label class="form-label" style="display:block;margin-bottom:8px">Password</label>
+              <button class="btn btn-secondary btn-sm" onclick="openChangeMyPassword()">🔑 Change Password</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" id="business-settings-card" style="margin-top:20px;display:none">
+          <div class="card-header">
+            <div class="card-title">Business Settings</div>
+            <div style="font-size:12px;color:var(--gray-400)">Admin only</div>
+          </div>
+          <div style="padding:20px;max-width:420px">
+            <div class="form-group"><label class="form-label">Business Name</label><input class="form-input" id="set-business-name"></div>
+            <div class="form-group"><label class="form-label">Phone</label><input class="form-input" id="set-phone"></div>
+            <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="set-address"></div>
+            <div class="form-group"><label class="form-label">Currency Symbol</label><input class="form-input" id="set-currency" style="max-width:100px"></div>
+            <div class="form-group"><label class="form-label">Default Reorder Level</label><input class="form-input" type="number" id="set-reorder" style="max-width:100px"></div>
+            <div class="form-error" id="set-business-error" style="display:none;color:#c0392b;font-size:12px;margin-bottom:10px"></div>
+            <button class="btn btn-primary" onclick="saveBusinessSettingsForm()">Save Business Settings</button>
+          </div>
+        </div>
+
+        <div class="card" id="backup-settings-card" style="margin-top:20px;display:none">
+          <div class="card-header">
+            <div class="card-title">Data &amp; Backup</div>
+            <div style="font-size:12px;color:var(--gray-400)">Admin only</div>
+          </div>
+          <div style="padding:20px;max-width:420px">
+            <p style="font-size:13px;color:var(--gray-600);line-height:1.5;margin:0 0 14px">Downloads a complete copy of your business data — products, customers, invoices, stock history, and warehouse records — as a set of CSV files (opens directly in Excel) you can save wherever you like.</p>
+            <button class="btn btn-primary" id="backup-export-btn" onclick="exportAllData()">⬇ Export All Data (CSV)</button>
+          </div>
         </div>
       </div>
 
@@ -673,8 +769,18 @@
   <div class="modal modal-sm">
     <div class="modal-header"><div class="modal-title">Change My Password</div><button class="modal-close" onclick="closeModal('my-password-modal')">×</button></div>
     <div class="modal-body">
-      <div class="form-group"><label class="form-label">New Password</label><input class="form-input" id="my-new-pw" type="password" placeholder="At least 6 characters"></div>
-      <div class="form-group"><label class="form-label">Confirm Password</label><input class="form-input" id="my-confirm-pw" type="password" placeholder="Repeat password"></div>
+      <div class="form-group"><label class="form-label">New Password</label>
+        <div class="pw-field">
+          <input class="form-input" id="my-new-pw" type="password" placeholder="At least 6 characters">
+          <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('my-new-pw', this)" aria-label="Show password"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg></button>
+        </div>
+      </div>
+      <div class="form-group"><label class="form-label">Confirm Password</label>
+        <div class="pw-field">
+          <input class="form-input" id="my-confirm-pw" type="password" placeholder="Repeat password">
+          <button type="button" class="pw-toggle" onclick="togglePasswordVisibility('my-confirm-pw', this)" aria-label="Show password"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3"><path d="M1 8s2.5-4.5 7-4.5S15 8 15 8s-2.5 4.5-7 4.5S1 8 1 8z"/><circle cx="8" cy="8" r="2"/></svg></button>
+        </div>
+      </div>
       <div class="form-error" id="my-pw-error"></div>
     </div>
     <div class="modal-footer">
@@ -1112,7 +1218,7 @@ KT001,Kettle,30,10,85</pre>
 </div>
 <!-- Warehouse View Movement Modal -->
 <div class="modal-overlay" id="warehouse-view-modal">
-  <div class="modal" style="max-width:900px">
+  <div class="modal">
 
     <div class="modal-header">
       <div class="modal-title" id="warehouse-view-title">
@@ -1147,12 +1253,78 @@ KT001,Kettle,30,10,85</pre>
   </div>
 </div>
 
+<!-- Warehouse Location Modal (add/edit) -->
+<div class="modal-overlay" id="warehouse-location-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="warehouse-location-modal-title">Add Warehouse</div>
+      <button class="modal-close" onclick="closeModal('warehouse-location-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Code</label>
+        <input class="form-input" id="wh-loc-code" placeholder="e.g. WH2">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input class="form-input" id="wh-loc-name" placeholder="e.g. Kumasi Central Warehouse">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Address</label>
+        <input class="form-input" id="wh-loc-address" placeholder="Leave blank until you have it">
+      </div>
+      <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px">
+          <input type="checkbox" id="wh-loc-active" checked style="width:14px;height:14px;margin:0"> Active
+        </label>
+      </div>
+      <div class="form-error" id="wh-loc-error"></div>
+    </div>
+    <div class="modal-footer">
+      <div class="modal-footer-right">
+        <button class="btn btn-secondary" onclick="closeModal('warehouse-location-modal')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveWarehouseLocation()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Warehouse Staff Assignment Modal -->
+<div class="modal-overlay" id="warehouse-staff-modal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <div class="modal-title" id="warehouse-staff-modal-title">Assign Staff</div>
+      <button class="modal-close" onclick="closeModal('warehouse-staff-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:12px">
+        Staff checked below can view and record stock for this warehouse. Admins always have access to every warehouse.
+      </div>
+      <div id="warehouse-staff-list"></div>
+    </div>
+    <div class="modal-footer">
+      <div class="modal-footer-right">
+        <button class="btn btn-secondary" onclick="closeModal('warehouse-staff-modal')">Done</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <datalist id="product-list"></datalist>
 
 <script src="supabase-config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="supabase-client.js"></script>
-<script src="app.js"></script>
+<script src="js/core.js"></script>
+<script src="js/auth.js"></script>
+<script src="js/invoices.js"></script>
+<script src="js/customers.js"></script>
+<script src="js/products.js"></script>
+<script src="js/dashboard.js"></script>
+<script src="js/reports.js"></script>
+<script src="js/admin.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/bootstrap.js"></script>
 <script src="warehouse.js"></script>
 </body>
 </html>

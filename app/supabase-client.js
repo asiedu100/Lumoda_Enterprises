@@ -51,7 +51,7 @@
     if (!sb) throw new Error('Supabase is not configured.');
     return sb
       .from('profiles')
-      .select('id, email, username, full_name, role, location, active, must_change_password')
+      .select('id, email, username, full_name, role, location, active, must_change_password, default_landing_page')
       .eq('id', userId)
       .single();
   }
@@ -64,6 +64,39 @@
       .select('id, email, username, full_name, role, location, active, must_change_password')
       .eq('username', username)
       .maybeSingle();
+  }
+
+  async function loadBusinessSettings() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.from('business_settings').select('*').eq('id', 1).single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function saveBusinessSettings(payload) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data: userData } = await sb.auth.getUser();
+    const { data, error } = await sb.from('business_settings').update({
+      business_name:          payload.businessName,
+      phone:                  payload.phone,
+      address:                payload.address,
+      currency_symbol:        payload.currencySymbol,
+      default_reorder_level:  Number(payload.defaultReorderLevel) || 0,
+      updated_at:             new Date().toISOString(),
+      updated_by:             userData?.user?.id || null
+    }).eq('id', 1).select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function saveMyDefaultLandingPage(page, userId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error } = await sb.from('profiles').update({ default_landing_page: page || null }).eq('id', userId);
+    if (error) throw error;
+    return true;
   }
 
   function toLocalProduct(row) {
@@ -321,7 +354,18 @@
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
     const { data, error } = await sb.functions.invoke('create-staff-account', { body: payload });
-    if (error) throw error;
+    if (error) {
+      // supabase-js's error.message for a failed Edge Function call is just
+      // "Edge Function returned a non-2xx status code" — the actual reason
+      // (e.g. "email already registered") is in the response body, which
+      // has to be read separately from error.context.
+      let reason = error.message;
+      try {
+        const body = await error.context?.json();
+        if (body?.error) reason = body.error;
+      } catch (_) { /* response wasn't JSON, or already consumed */ }
+      throw new Error(reason);
+    }
     return data;
   }
 
@@ -548,7 +592,8 @@
       p_storekeeper:     payload.storekeeper     || null,
       p_supplier:        payload.supplier        || null,
       p_notes:           payload.notes           || null,
-      p_created_by_name: payload.created_by_name || null
+      p_created_by_name: payload.created_by_name || null,
+      p_warehouse_id:    payload.warehouse_id    || null
     });
     if (error) throw error;
     return data;
@@ -564,10 +609,12 @@
     return data;
   }
 
-  async function loadWarehouseStockBalance() {
+  async function loadWarehouseStockBalance(warehouseId) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb.from('warehouse_stock_balance').select('*').order('updated_at', { ascending: false });
+    let query = sb.from('warehouse_stock_balance').select('*').order('updated_at', { ascending: false });
+    if (warehouseId) query = query.eq('warehouse_id', warehouseId);
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
   }
@@ -578,17 +625,28 @@
   async function saveWarehouseProduct(payload) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb.from('warehouse_products').upsert({
-      code:              payload.code,
-      name:              payload.name,
-      category:          payload.category     || 'General',
-      reorder_level:     Number(payload.reorder || payload.reorder_level || 0),
-      created_by:        payload.created_by   || null,
-      created_by_name:   payload.created_by_name || null,
-      updated_at:        new Date().toISOString()
-    }, { onConflict: 'code' }).select().single();
+    // NOTE: warehouse_products only has id/name/sku/category/cartons/
+    // reorder_level/created_at — no code/created_by/created_by_name/updated_at.
+    const row = {
+      name:          payload.name,
+      sku:           payload.sku || payload.code || null,
+      category:      payload.category || 'General',
+      reorder_level: Number(payload.reorder || payload.reorder_level || 0)
+    };
+    if (payload.id) row.id = payload.id;
+    const { data, error } = await sb.from('warehouse_products')
+      .upsert(row, { onConflict: row.id ? 'id' : 'sku' })
+      .select().single();
     if (error) throw error;
     return data;
+  }
+
+  async function deleteWarehouseProduct(id) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error } = await sb.from('warehouse_products').delete().eq('id', id);
+    if (error) throw error;
+    return true;
   }
 
   async function saveWarehouseSupplier(payload) {
@@ -607,12 +665,77 @@
     return data;
   }
 
-  async function loadWarehouseMovements() {
+  async function loadWarehouseMovements(warehouseId) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb.from('warehouse_movements').select('*').order('created_at', { ascending: false });
+    let query = sb.from('warehouse_movements').select('*').order('created_at', { ascending: false });
+    if (warehouseId) query = query.eq('warehouse_id', warehouseId);
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
+  }
+
+  // ============================================================
+  // WAREHOUSES (locations) + staff assignment
+  // ============================================================
+  async function loadWarehouses() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.from('warehouses').select('*').order('name', { ascending: true });
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function saveWarehouse(payload) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const row = {
+      code:   payload.code,
+      name:   payload.name,
+      address: payload.address || null,
+      active: payload.active != null ? !!payload.active : true
+    };
+    if (payload.id) row.id = payload.id;
+    const { data, error } = await sb.from('warehouses')
+      .upsert(row, { onConflict: row.id ? 'id' : 'code' })
+      .select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function deleteWarehouse(id) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error } = await sb.from('warehouses').delete().eq('id', id);
+    if (error) throw error;
+    return true;
+  }
+
+  async function loadWarehouseStaffAssignments() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.from('warehouse_staff_assignments').select('*');
+    if (error) throw error;
+    return data || [];
+  }
+
+  async function assignStaffToWarehouse(profileId, warehouseId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.from('warehouse_staff_assignments')
+      .upsert({ profile_id: profileId, warehouse_id: warehouseId }, { onConflict: 'profile_id,warehouse_id' })
+      .select().single();
+    if (error) throw error;
+    return data;
+  }
+
+  async function removeStaffFromWarehouse(profileId, warehouseId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error } = await sb.from('warehouse_staff_assignments')
+      .delete().eq('profile_id', profileId).eq('warehouse_id', warehouseId);
+    if (error) throw error;
+    return true;
   }
 
   async function loadWarehouseProducts() {
@@ -642,6 +765,9 @@
     getSession,
     getProfile,
     getProfileByUsername,
+    loadBusinessSettings,
+    saveBusinessSettings,
+    saveMyDefaultLandingPage,
 
     signIn,
     signOut,
@@ -680,12 +806,20 @@
     saveWarehouseStockOut,
     saveWarehouseMovement,
     saveWarehouseProduct,
+    deleteWarehouseProduct,
     saveWarehouseSupplier,
     loadWarehouseMovements,
     loadWarehouseProducts,
     loadWarehouseSuppliers,
     postWarehouseMovementDirect,
     approveWarehouseMovement,
-    loadWarehouseStockBalance
+    loadWarehouseStockBalance,
+
+    loadWarehouses,
+    saveWarehouse,
+    deleteWarehouse,
+    loadWarehouseStaffAssignments,
+    assignStaffToWarehouse,
+    removeStaffFromWarehouse
   };
 })();
