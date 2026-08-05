@@ -38,9 +38,81 @@ async function renderSettings() {
     document.getElementById('set-address').value        = settings.address || '';
     document.getElementById('set-currency').value       = settings.currency_symbol || '';
     document.getElementById('set-reorder').value        = settings.default_reorder_level ?? '';
+    document.getElementById('set-brand-color').value    = settings.brand_color || '#5C2D0A';
+    document.getElementById('set-brand-color-hex').textContent = settings.brand_color || '#5C2D0A';
+    updateLogoPreviewUI(settings.logo_url);
+    // Belt-and-suspenders: normally applied at login, but repaint here too
+    // in case this is the freshest data the page has seen yet.
+    applyBrandColor(settings.brand_color);
+    applyLogo(settings.logo_url);
+    applyBusinessName(settings.business_name);
+    LS.set('lumoda_business_settings', settings);
   } catch (error) {
     console.error('Could not load business settings:', error);
     toast('Could not load business settings', 'error');
+  }
+}
+
+// Repaints the app live as soon as a new colour is picked, before Save is
+// even clicked — makes it obvious what you're about to commit to.
+function previewBrandColor() {
+  const hex = document.getElementById('set-brand-color').value;
+  document.getElementById('set-brand-color-hex').textContent = hex;
+  applyBrandColor(hex);
+}
+
+// Keeps the small preview swatch in Business Settings in sync with
+// whether a logo is actually set, separate from the sidebar/login mark.
+function updateLogoPreviewUI(url) {
+  const img = document.getElementById('set-logo-preview');
+  const empty = document.getElementById('set-logo-preview-empty');
+  const removeBtn = document.getElementById('set-logo-remove-btn');
+  if (url) {
+    img.src = url; img.style.display = ''; empty.style.display = 'none';
+    if (removeBtn) removeBtn.style.display = '';
+  } else {
+    img.style.display = 'none'; empty.style.display = '';
+    if (removeBtn) removeBtn.style.display = 'none';
+  }
+}
+
+const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+
+async function uploadLogoFile() {
+  if (!requireAdmin('change the logo')) return;
+  const input = document.getElementById('set-logo-file');
+  const file = input.files?.[0];
+  if (!file) return;
+  if (file.size > LOGO_MAX_BYTES) { toast('Logo must be under 2MB', 'error'); input.value = ''; return; }
+  try {
+    const url = await window.LumodaSupabase.uploadLogo(file);
+    const saved = await window.LumodaSupabase.saveLogoUrl(url);
+    if (saved) LS.set('lumoda_business_settings', saved);
+    updateLogoPreviewUI(url);
+    applyLogo(url);
+    addAudit('Logo Updated', `${currentUser.fullName} updated the business logo`);
+    toast('Logo updated');
+  } catch (error) {
+    console.error('Logo upload failed:', error);
+    toast(error.message || 'Could not upload logo', 'error');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function removeLogo() {
+  if (!requireAdmin('change the logo')) return;
+  if (!confirm('Remove the current logo? The default Lumoda mark will show instead.')) return;
+  try {
+    const saved = await window.LumodaSupabase.saveLogoUrl(null);
+    if (saved) LS.set('lumoda_business_settings', saved);
+    updateLogoPreviewUI(null);
+    applyLogo(null);
+    addAudit('Logo Removed', `${currentUser.fullName} removed the business logo`);
+    toast('Logo removed');
+  } catch (error) {
+    console.error('Could not remove logo:', error);
+    toast(error.message || 'Could not remove logo', 'error');
   }
 }
 
@@ -64,13 +136,18 @@ async function saveBusinessSettingsForm() {
   const businessName = document.getElementById('set-business-name').value.trim();
   if (!businessName) { errEl.textContent = 'Business name is required.'; errEl.style.display = 'block'; return; }
   try {
-    await window.LumodaSupabase.saveBusinessSettings({
+    const saved = await window.LumodaSupabase.saveBusinessSettings({
       businessName,
       phone:                document.getElementById('set-phone').value.trim(),
       address:              document.getElementById('set-address').value.trim(),
       currencySymbol:       document.getElementById('set-currency').value.trim() || 'GH₵',
-      defaultReorderLevel:  document.getElementById('set-reorder').value
+      defaultReorderLevel:  document.getElementById('set-reorder').value,
+      brandColor:           document.getElementById('set-brand-color').value
     });
+    // Update the local cache immediately — without this, fmtGHS()/reorder
+    // defaults/brand colour would keep showing the old values until the
+    // next full login sync, even though the save itself succeeded.
+    if (saved) { LS.set('lumoda_business_settings', saved); applyBrandColor(saved.brand_color); applyBusinessName(saved.business_name); }
     addAudit('Business Settings Updated', `${currentUser.fullName} updated business settings`);
     toast('Business settings saved');
   } catch (error) {

@@ -6,9 +6,11 @@ function renderProducts() {
   const csvBtn   = document.getElementById('btn-import-csv');
   const addBtn   = document.getElementById('btn-add-product');
   const orderBtn = document.getElementById('btn-order-stock');
+  const linkBtn  = document.getElementById('btn-link-warehouse');
   if (csvBtn)   csvBtn.style.display   = isAdmin() ? 'inline-flex' : 'none';
   if (addBtn)   addBtn.style.display   = isAdmin() ? 'inline-flex' : 'none';
   if (orderBtn) orderBtn.style.display = isAdmin() ? 'inline-flex' : 'none';
+  if (linkBtn)  linkBtn.style.display  = isAdmin() ? 'inline-flex' : 'none';
   let products = getProducts();
   if(productSearch){const q=productSearch.toLowerCase();products=products.filter(p=>p.name.toLowerCase().includes(q)||p.category.toLowerCase().includes(q)||p.sku.toLowerCase().includes(q));}
   const effLoc=isAdmin()?currentLocation:currentUser.location;
@@ -99,7 +101,7 @@ async function saveProduct(){
   renderProducts();
 }
 
-function orderStock(){if(!requireAdmin('order stock'))return;const low=getProducts().filter(p=>p.stockAlabar<=p.reorder||p.stockMorocco<=p.reorder);if(low.length===0){toast('No restocking needed');return;}const text='LUMODA ENTERPRISE — Restock Order\n\n'+low.map(p=>'• '+p.name+' ('+p.sku+')\n  Alabar: '+p.stockAlabar+' | Morocco: '+p.stockMorocco+' | Reorder at: '+p.reorder).join('\n');try{navigator.clipboard.writeText(text);toast('Restock list copied');}catch{alert(text);}}
+function orderStock(){if(!requireAdmin('order stock'))return;const low=getProducts().filter(p=>p.stockAlabar<=p.reorder||p.stockMorocco<=p.reorder);if(low.length===0){toast('No restocking needed');return;}const text=getBusinessName()+' — Restock Order\n\n'+low.map(p=>'• '+p.name+' ('+p.sku+')\n  Alabar: '+p.stockAlabar+' | Morocco: '+p.stockMorocco+' | Reorder at: '+p.reorder).join('\n');try{navigator.clipboard.writeText(text);toast('Restock list copied');}catch{alert(text);}}
 
 // ============================================================
 // STOCK ADJUSTMENT
@@ -120,33 +122,21 @@ async function applyStockAdjustment(){
   const isAdd=['Purchase','Return'].includes(type);
   const absQty=Math.abs(qty);
   const change=isAdd?absQty:-absQty;
-  let newStockAlabar=prod.stockAlabar, newStockMorocco=prod.stockMorocco;
-  if(loc==='Alabar'){
-    if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}
-    newStockAlabar=Math.max(0,prod.stockAlabar+change);
-  }else{
-    if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}
-    newStockMorocco=Math.max(0,prod.stockMorocco+change);
-  }
 
-  // Must persist the new stock level to Supabase, not just localStorage —
-  // otherwise the next syncSupabaseCache() call (fires after almost every
-  // other action) silently reverts it back to the pre-adjustment value.
-  if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&window.LumodaSupabase.saveProduct){
+  // The actual read-check-write and stock_history insert now happen
+  // together, atomically, server-side (adjust_product_stock) — this avoids
+  // the old race where two concurrent adjustments could both read the same
+  // stale stock value and the second write would silently clobber the
+  // first. The values below are only used for the offline/not-configured
+  // fallback path.
+  if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()&&window.LumodaSupabase.adjustProductStock){
     try{
-      const res=await window.LumodaSupabase.saveProduct({
-        id:prod.id, name:prod.name, sku:prod.sku, category:prod.category,
-        price:prod.retailPrice??prod.price, retailPrice:prod.retailPrice??prod.price,
-        wholesalePrice:prod.wholesalePrice, cartonPrice:prod.cartonPrice,
-        stockAlabar:newStockAlabar, stockMorocco:newStockMorocco, reorder:prod.reorder
+      const res=await window.LumodaSupabase.adjustProductStock({
+        productId:prod.id, location:loc, delta:change, type, note:note||('Manual '+type)
       });
-      if(res.error)throw res.error;
-      // Patch the local cache directly instead of a full syncSupabaseCache() —
-      // we already know exactly what was just written (no server-generated
-      // fields like an invoice number are involved here), so a full re-pull
-      // of every product/invoice/customer would just be wasted round-trip time.
+      if(!res?.success){toast(res?.error||'Could not save stock adjustment','error');return;}
       const cacheIdx=products.findIndex(p=>p.id===prod.id);
-      if(cacheIdx>=0) products[cacheIdx]={...prod,stockAlabar:newStockAlabar,stockMorocco:newStockMorocco};
+      if(cacheIdx>=0) products[cacheIdx]={...prod,stockAlabar:res.stock_alabar,stockMorocco:res.stock_morocco};
       LS.set('lumoda_products',normalizeProducts(products));
       loadProductSuggestions(getProducts());
     }catch(err){
@@ -154,11 +144,20 @@ async function applyStockAdjustment(){
       return;
     }
   }else{
+    let newStockAlabar=prod.stockAlabar, newStockMorocco=prod.stockMorocco;
+    if(loc==='Alabar'){
+      if(!isAdd&&prod.stockAlabar<absQty){toast('Insufficient stock','error');return;}
+      newStockAlabar=Math.max(0,prod.stockAlabar+change);
+    }else{
+      if(!isAdd&&prod.stockMorocco<absQty){toast('Insufficient stock','error');return;}
+      newStockMorocco=Math.max(0,prod.stockMorocco+change);
+    }
     products[idx]={...prod,stockAlabar:newStockAlabar,stockMorocco:newStockMorocco};
     LS.set('lumoda_products',products);
+    // No server round-trip in this path, so log locally as before.
+    addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);
   }
 
-  addStockHistory(prod.id,prod.name,loc,change,type,note||'Manual '+type);
   addAudit('Stock Adjusted',currentUser.fullName+' adjusted "'+prod.name+'" '+(change>0?'+':'')+change+' at '+loc+' ('+type+')');
   closeModal('stock-modal');
   toast('Stock updated');
@@ -228,4 +227,120 @@ function removeCsvRow(i){csvRows.splice(i,1);renderCsvPreview();}
 async function importCsvProducts(){if(!requireAdmin('import products'))return;if(!csvRows.length)return;if(window.LumodaSupabase&&window.LumodaSupabase.isConfigured()){try{const res=await window.LumodaSupabase.importProducts(csvRows.map(r=>({name:r.name,sku:r.sku,category:r.category||'General',price:r.price||0,stock_alabar:r.stockAlabar||0,stock_morocco:r.stockMorocco||0,reorder_level:r.reorder||getDefaultReorderLevel()})));if(res.error)throw res.error;await syncSupabaseCache();addAudit('CSV Imported',currentUser.fullName+' imported '+csvRows.length+' products [server]');closeModal('csv-modal');toast(csvRows.length+' products imported');renderProducts();return;}catch(err){showCsvError(err.message||'Could not import products to Supabase.');return;}}showCsvError('Supabase is not configured. CSV imports are disabled.');}
 function downloadCsvTemplate(){const csv='Name,Price,SKU,Category,AlabarStock,MoroccoStock,ReorderLevel\nExample Product,100,EX-001,General,10,5,3';const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-products-template.csv';a.click();URL.revokeObjectURL(a.href);}
 function exportCSV(){const h=getStockHistory();const csv='Date,Type,Product,Location,Change,Note,By\n'+h.map(x=>[fmtDateTime(x.createdAt),x.type,x.productName,x.location,x.change,x.note,x.byName||x.by].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');const blob=new Blob([csv],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='lumoda-stock-history.csv';a.click();URL.revokeObjectURL(a.href);}
+
+// ============================================================
+// LINK PRODUCTS TO WAREHOUSE CATALOG (one-time reconciliation)
+// Products and warehouse items are two separate catalogs that historically
+// never shared a code. Going forward a DB trigger keeps them in sync
+// automatically (saving a product creates/updates a matching warehouse
+// item). This screen handles the existing mismatch: it proposes pairs by
+// an exact name match and lets an admin confirm or skip each one — never
+// links anything without a human looking at it, since two different real
+// products can easily share a similar name.
+// ============================================================
+let catalogLinkCandidates = [];
+let catalogLinkRemainingCount = 0;
+
+async function openCatalogLinkModal(){
+  if(!requireAdmin('link the warehouse catalog'))return;
+  if(typeof syncWarehouseCacheFromServer === 'function') await syncWarehouseCacheFromServer();
+  buildCatalogLinkCandidates();
+  renderCatalogLinkRows();
+  openModal('catalog-link-modal');
+}
+
+function buildCatalogLinkCandidates(){
+  const products = getProducts().filter(p=>p.sku);
+  const whItems = (typeof getWarehouseProductsLocal === 'function' ? getWarehouseProductsLocal() : []);
+  const bySku = new Set(whItems.map(w=>String(w.code||'').toLowerCase()).filter(Boolean));
+
+  // A product may already have its own auto-created warehouse row (the
+  // sync trigger fires on every save) — that alone doesn't mean there's
+  // nothing to reconcile. A separate, older warehouse item can still exist
+  // under a different code with the same name, holding real stock that
+  // hasn't been merged in yet. So candidates are: any warehouse item whose
+  // name matches a product but whose code does NOT match that product's own
+  // sku — regardless of whether the product already has its own row.
+  const usedWhIds = new Set();
+  catalogLinkCandidates = [];
+  let remaining = 0;
+  products.forEach(p=>{
+    const ownSku = String(p.sku).toLowerCase();
+    const nameKey = String(p.name||'').trim().toLowerCase();
+    const orphan = whItems.find(w=>
+      !usedWhIds.has(w.id) &&
+      String(w.code||'').toLowerCase() !== ownSku &&
+      String(w.name||'').trim().toLowerCase() === nameKey
+    );
+    if(orphan){
+      usedWhIds.add(orphan.id);
+      catalogLinkCandidates.push({ product:p, whItem:orphan });
+    } else if(!bySku.has(ownSku)){
+      remaining++;
+    }
+  });
+  catalogLinkRemainingCount = remaining;
+}
+
+function renderCatalogLinkRows(){
+  const body = document.getElementById('catalog-link-rows');
+  const remainingEl = document.getElementById('catalog-link-remaining');
+  if(body){
+    body.innerHTML = catalogLinkCandidates.length ? catalogLinkCandidates.map((c,i)=>
+      '<tr>'+
+        '<td>'+escapeHtml(c.product.name)+' <span class="mono" style="color:var(--gray-400);font-size:11px">('+escapeHtml(c.product.sku)+')</span></td>'+
+        '<td>'+escapeHtml(c.whItem.name)+' <span class="mono" style="color:var(--gray-400);font-size:11px">('+escapeHtml(c.whItem.code)+')</span></td>'+
+        '<td style="white-space:nowrap">'+
+          '<button class="btn btn-primary btn-sm" onclick="confirmCatalogLink('+i+')">Confirm</button> '+
+          '<button class="btn btn-secondary btn-sm" onclick="skipCatalogLink('+i+')">Skip</button>'+
+        '</td>'+
+      '</tr>'
+    ).join('') : '<tr><td colspan="3" style="text-align:center;color:var(--gray-400);padding:20px">No proposed matches right now</td></tr>';
+  }
+  if(remainingEl){
+    remainingEl.textContent = catalogLinkRemainingCount > 0
+      ? catalogLinkRemainingCount+' product(s) have no proposed match.'
+      : 'Every product either has a warehouse match or already has a warehouse entry.';
+    if(catalogLinkRemainingCount > 0){
+      remainingEl.innerHTML += ' <button class="btn btn-primary btn-sm" onclick="backfillRemainingWarehouseEntries()">Create warehouse entries for the remaining '+catalogLinkRemainingCount+'</button>';
+    }
+  }
+}
+
+function skipCatalogLink(index){
+  catalogLinkCandidates.splice(index,1);
+  renderCatalogLinkRows();
+}
+
+async function confirmCatalogLink(index){
+  const c = catalogLinkCandidates[index];
+  if(!c)return;
+  try{
+    const res = await window.LumodaSupabase.linkCatalogItem(c.product.id, c.whItem.id);
+    if(!res?.success){toast(res?.error||'Could not link item','error');return;}
+    if(typeof addAudit==='function') addAudit('Catalog Linked', currentUser.fullName+' linked "'+c.product.name+'" to the warehouse catalog');
+    toast('Linked "'+c.product.name+'"');
+    catalogLinkCandidates.splice(index,1);
+    if(typeof syncWarehouseCacheFromServer === 'function') await syncWarehouseCacheFromServer();
+    renderCatalogLinkRows();
+  }catch(err){
+    console.error('Link catalog item failed:', err);
+    toast(err.message||'Could not link item','error');
+  }
+}
+
+async function backfillRemainingWarehouseEntries(){
+  try{
+    const res = await window.LumodaSupabase.backfillWarehouseCatalog();
+    if(!res?.success){toast(res?.error||'Could not create warehouse entries','error');return;}
+    if(typeof addAudit==='function') addAudit('Catalog Backfilled', currentUser.fullName+' created '+res.created+' warehouse entr'+(res.created===1?'y':'ies')+' from products');
+    toast(res.created+' warehouse entr'+(res.created===1?'y':'ies')+' created');
+    if(typeof syncWarehouseCacheFromServer === 'function') await syncWarehouseCacheFromServer();
+    buildCatalogLinkCandidates();
+    renderCatalogLinkRows();
+  }catch(err){
+    console.error('Backfill warehouse catalog failed:', err);
+    toast(err.message||'Could not create warehouse entries','error');
+  }
+}
 

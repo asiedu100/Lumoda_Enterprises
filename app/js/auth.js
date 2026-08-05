@@ -138,7 +138,7 @@ async function syncSupabaseCache() {
 
   // Cached so synchronous formatters/defaults (fmtGHS, new-item reorder
   // pre-fill) can read it without needing to be made async everywhere.
-  if (businessSettings) LS.set('lumoda_business_settings', businessSettings);
+  if (businessSettings) { LS.set('lumoda_business_settings', businessSettings); applyBrandColor(businessSettings.brand_color); applyLogo(businessSettings.logo_url); applyBusinessName(businessSettings.business_name); }
 
   // Merge server stock history into local (server is source of truth)
   if (Array.isArray(stockHistory) && stockHistory.length > 0) {
@@ -239,7 +239,7 @@ function doChangePassword() {
 // LOGOUT
 // ============================================================
 async function doLogout() {
-  if (!confirm('Sign out of LUMODA ENTERPRISE?')) return;
+  if (!confirm('Sign out of ' + getBusinessName() + '?')) return;
   addAudit('Logout', `"${currentUser.fullName}" signed out`);
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try { await window.LumodaSupabase.signOut(); } catch (e) {}

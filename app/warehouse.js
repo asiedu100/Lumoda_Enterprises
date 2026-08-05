@@ -127,9 +127,7 @@ function whDate(value) {
 
 function warehouseStatusBadge(status) {
   const s = status || 'executed';
-  if (s === 'pending')  return '<span class="badge badge-warning">Pending</span>';
   if (s === 'executed') return '<span class="badge badge-success">Executed</span>';
-  if (s === 'rejected') return '<span class="badge badge-danger">Rejected</span>';
   return `<span class="badge badge-neutral">${escapeHtml(s)}</span>`;
 }
 
@@ -138,7 +136,8 @@ function formatWarehouseType(type) {
     opening_balance: 'Opening Balance',
     stock_in:        'Stock In',
     stock_out:       'Stock Out',
-    adjustment:      'Adjustment'
+    adjustment:      'Adjustment',
+    transfer:        'Transfer'
   };
   return labels[type] || type || '—';
 }
@@ -148,7 +147,8 @@ function warehouseTypeBadgeClass(type) {
     stock_in:        'badge-success',
     stock_out:       'badge-warning',
     adjustment:      'badge-info',
-    opening_balance: 'badge-neutral'
+    opening_balance: 'badge-neutral',
+    transfer:        'badge-info'
   };
   return classes[type] || 'badge-neutral';
 }
@@ -170,6 +170,7 @@ function normalizeWarehouseMovement(row) {
   return {
     id:              row.id,
     warehouseId:     row.warehouse_id || row.warehouseId || null,
+    toWarehouseId:   row.to_warehouse_id || row.toWarehouseId || null,
     type:            row.type,
     requisitionNo:   row.requisition_no   || row.requisitionNo   || '',
     issueTo:         row.issue_to         || row.issueTo         || '',
@@ -368,7 +369,8 @@ function _buildLowStockHTML(lowStockItems) {
     const borderColor = isCritical ? '#fca5a5' : '#fde047';
 
     return `
-      <div style="display:flex;align-items:center;gap:14px;padding:12px 14px;
+      <div onclick="quickReorderFromLowStock('${escAttr(b.itemCode)}', '${escAttr(b.warehouseId || '')}')"
+           style="display:flex;align-items:center;gap:14px;padding:12px 14px;cursor:pointer;
                   background:${bgColor};border:1px solid ${borderColor};
                   border-radius:8px;margin-bottom:8px">
         <div style="flex:1;min-width:0">
@@ -382,6 +384,7 @@ function _buildLowStockHTML(lowStockItems) {
           <div style="margin-top:6px;height:4px;background:var(--gray-100);border-radius:2px;overflow:hidden">
             <div style="height:100%;width:${pct}%;background:${barColor};border-radius:2px;transition:width .3s"></div>
           </div>
+          <div style="margin-top:5px;font-size:10px;color:var(--gray-400)">Tap to reorder →</div>
         </div>
         <div style="flex-shrink:0">
           ${isCritical
@@ -474,7 +477,7 @@ function _buildBalanceHTML(allBalances) {
       <td class="mono" style="text-align:center">${b.totalCartons}</td>
       <td class="mono" style="text-align:center;color:var(--gray-400)">${b.reservedCartons}</td>
       <td class="mono" style="text-align:center;font-weight:700;color:${
-        isLow ? '#dc2626' : 'var(--brand-brown)'
+        isLow ? '#dc2626' : 'var(--accent)'
       }">${available}</td>
       <td class="mono" style="text-align:center;color:var(--gray-400)">${reorder}</td>
       <td>
@@ -554,6 +557,47 @@ async function deleteWarehouseProductItem(productId) {
   }
 }
 
+// Same time-of-day greeting pattern as the Dashboard (auth.js
+// updateUserUI), reusing the same .greeting-bar styling for consistency —
+// just swapped to show which warehouse is currently in view instead of a
+// branch.
+function warehouseGreetingHTML() {
+  const hr = new Date().getHours();
+  const greet = hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening';
+  const firstName = (currentUser?.fullName || 'there').split(' ')[0];
+  const wh = (currentWarehouseId && currentWarehouseId !== 'all')
+    ? getWarehousesLocal().find(w => w.id === currentWarehouseId)
+    : null;
+  const whLabel = wh ? wh.name : 'All Warehouses';
+  const dateStr = new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  return `<div class="greeting-bar"><h1>${greet}, ${escapeHtml(firstName)} 👋</h1><p>${dateStr} · ${escapeHtml(whLabel)}</p></div>`;
+}
+
+// Shown immediately on login/page load — not something you have to go
+// looking for on a separate card. This is the actual "proactive" part:
+// nothing runs out silently while nobody's checking, since it's the
+// first thing in view rather than buried further down the page.
+function lowStockAlertHTML(lowStockItems) {
+  if (!lowStockItems || !lowStockItems.length) return '';
+  const outCount = lowStockItems.filter(b => Number(b.availableCartons || 0) === 0).length;
+  const lowCount = lowStockItems.length - outCount;
+  const parts = [];
+  if (outCount) parts.push(`<strong>${outCount}</strong> out of stock`);
+  if (lowCount) parts.push(`<strong>${lowCount}</strong> running low`);
+  return `
+    <div onclick="document.getElementById('wh-low-stock-card')?.scrollIntoView({behavior:'smooth',block:'start'})"
+      style="display:flex;align-items:center;gap:12px;padding:12px 16px;margin-bottom:16px;
+             background:#fef2f2;border:1px solid #fca5a5;border-radius:var(--radius-lg);cursor:pointer">
+      <svg width="19" height="19" viewBox="0 0 16 16" fill="#dc2626" style="flex-shrink:0">
+        <path d="M8 0L1 14h14L8 0zm-.6 5.2h1.2l-.2 5h-.8l-.2-5zM8 11.2a.8.8 0 1 1 0 1.6.8.8 0 0 1 0-1.6z"/>
+      </svg>
+      <div style="flex:1">
+        <div style="font-size:13.5px;font-weight:600;color:#7f1d1d">${parts.join(' · ')} — needs attention</div>
+        <div style="font-size:11.5px;color:#991b1b;margin-top:1px">Tap to view details</div>
+      </div>
+    </div>`;
+}
+
 // ============================================================
 // RENDER WAREHOUSE (main)
 // ============================================================
@@ -587,11 +631,12 @@ async function renderWarehouse() {
   );
 
   body.innerHTML = `
-
+    ${warehouseGreetingHTML()}
+    ${lowStockAlertHTML(lowStockItems)}
     ${showWarehouseSwitcher ? `
     <!-- WAREHOUSE SWITCHER -->
     <div id="wh-switcher-bar" style="display:flex;align-items:center;gap:10px;margin-bottom:14px;padding:9px 12px;background:var(--gray-50);border:1px solid var(--gray-100);border-radius:var(--radius-lg)">
-      <svg width="15" height="15" viewBox="0 0 16 16" fill="var(--brand-brown)" style="flex-shrink:0"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>
+      <svg width="15" height="15" viewBox="0 0 16 16" fill="var(--accent)" style="flex-shrink:0"><path d="M8 0L1 4v8l7 4 7-4V4L8 0zm0 2.2L13 5l-5 2.8L3 5l5-2.8zM2 6.4l5 2.8v5.4L2 11.8V6.4zm6 8.2V9.2l5-2.8v5.4l-5 2.8z"/></svg>
       <span style="font-size:10px;color:var(--gray-400);font-family:var(--font-mono);text-transform:uppercase;letter-spacing:.07em;flex-shrink:0">Warehouse</span>
       <select class="form-select" style="width:auto;min-width:160px;max-width:220px" onchange="switchWarehouse(this.value)">
         ${isAdmin() ? `<option value="all" ${currentWarehouseId === 'all' ? 'selected' : ''}>All Warehouses</option>` : ''}
@@ -644,12 +689,14 @@ async function renderWarehouse() {
       <button class="btn btn-primary" onclick="openWarehouseStockInModal()">+ Stock In</button>
       <button class="btn btn-warning" onclick="openWarehouseAdjustmentModal()">⚖ Adjustment</button>
       <button class="btn btn-secondary" onclick="openWarehouseStockOutModal()">Stock Out / Requisition</button>
+      ${warehouseList.length > 1 ? `<button class="btn btn-secondary" onclick="openWarehouseTransferModal()">⇄ Transfer</button>` : ''}
+      <button class="btn btn-secondary" onclick="openWarehouseCycleCountModal()">📋 Cycle Count</button>
       <button class="btn btn-secondary" onclick="openWarehouseCsvModal()">⬆ Import CSV</button>
       <button class="btn btn-secondary" onclick="renderWarehouse()">↻ Refresh</button>
     </div>
 
     <!-- LOW STOCK ALERTS -->
-    <div class="card" style="margin-bottom:14px">
+    <div class="card" style="margin-bottom:14px" id="wh-low-stock-card">
       <div class="card-header">
         <div class="card-title">
           Low Stock Alerts
@@ -684,7 +731,7 @@ async function renderWarehouse() {
               style="padding:6px 10px 6px 28px;border:1px solid var(--gray-200);border-radius:var(--radius);
                      font-size:13px;width:200px;outline:none;font-family:var(--font-sans);
                      background:var(--white);color:var(--black)"
-              onfocus="this.style.borderColor='var(--brand-brown)'"
+              onfocus="this.style.borderColor='var(--accent)'"
               onblur="this.style.borderColor='var(--gray-200)'">
           </div>
         </div>
@@ -709,12 +756,11 @@ async function renderWarehouse() {
           <option value="opening_balance" ${warehouseMovementFilter.type === 'opening_balance' ? 'selected' : ''}>Opening</option>
           <option value="stock_in"        ${warehouseMovementFilter.type === 'stock_in'        ? 'selected' : ''}>Stock In</option>
           <option value="stock_out"       ${warehouseMovementFilter.type === 'stock_out'       ? 'selected' : ''}>Stock Out</option>
+          <option value="transfer"        ${warehouseMovementFilter.type === 'transfer'        ? 'selected' : ''}>Transfer</option>
         </select>
         <select class="form-select" style="max-width:150px" onchange="updateWarehouseMovementFilter('status', this.value)">
           <option value="all"      ${warehouseMovementFilter.status === 'all'      ? 'selected' : ''}>All Status</option>
           <option value="executed" ${warehouseMovementFilter.status === 'executed' ? 'selected' : ''}>Executed</option>
-          <option value="pending"  ${warehouseMovementFilter.status === 'pending'  ? 'selected' : ''}>Pending</option>
-          <option value="rejected" ${warehouseMovementFilter.status === 'rejected' ? 'selected' : ''}>Rejected</option>
         </select>
       </div>
       <div style="overflow-x:auto">
@@ -751,7 +797,17 @@ async function renderWarehouse() {
         </table>
       </div>
     </div>
+
+    <!-- SUPPLIERS -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-header">
+        <div class="card-title">Suppliers</div>
+        <button class="btn btn-secondary btn-sm" style="margin-left:auto" onclick="openWarehouseSupplierModal()">+ Add Supplier</button>
+      </div>
+      <div style="overflow-x:auto" id="wh-suppliers-container"></div>
+    </div>
   `;
+  renderWarehouseSuppliers();
 }
 
 // ============================================================
@@ -916,6 +972,101 @@ async function toggleWarehouseStaffAssignment(profileId, checked) {
 }
 
 // ============================================================
+// SUPPLIERS — shared directory across all warehouses (own card in
+// renderWarehouse(), not a stock-affecting action, so it lives outside the
+// top action-buttons row). Open to both admin and warehouse_manager — no
+// admin-only gate, matching the already-open RLS and the standing rule that
+// nothing here should wait on an admin who may be unreachable for months.
+// ============================================================
+let editingSupplierId = null;
+
+function renderWarehouseSuppliers() {
+  const container = document.getElementById('wh-suppliers-container');
+  if (!container) return;
+  const suppliers = getWarehouseSuppliersLocal();
+  container.innerHTML = suppliers.length ? `
+    <table>
+      <thead><tr><th>Name</th><th>Phone</th><th>Location</th><th>Notes</th><th></th></tr></thead>
+      <tbody>
+        ${suppliers.map(s => `
+          <tr>
+            <td style="font-weight:500">${escapeHtml(s.name)}</td>
+            <td class="mono" style="font-size:12px">${escapeHtml(s.phone || '—')}</td>
+            <td style="color:var(--gray-400)">${escapeHtml(s.location || '—')}</td>
+            <td style="color:var(--gray-400);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(s.notes || '—')}</td>
+            <td style="white-space:nowrap">
+              <button class="btn btn-secondary btn-sm" onclick="openWarehouseSupplierModal('${s.id}')">Edit</button>
+              <button class="btn btn-secondary btn-sm" style="color:#991b1b" onclick="deleteSupplier('${s.id}')">Delete</button>
+            </td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  ` : `<div style="padding:24px;text-align:center;color:var(--gray-400);font-size:13px">No suppliers yet — add one to pick from a list during Stock In instead of retyping a name each time.</div>`;
+}
+
+function openWarehouseSupplierModal(id, opts) {
+  editingSupplierId = id || null;
+  const s = id ? getWarehouseSuppliersLocal().find(x => x.id === id) : null;
+  document.getElementById('supplier-modal-title').textContent = s ? 'Edit Supplier' : 'Add Supplier';
+  document.getElementById('supplier-id').value       = s?.id       || '';
+  document.getElementById('supplier-name').value     = s?.name     || '';
+  document.getElementById('supplier-phone').value    = s?.phone    || '';
+  document.getElementById('supplier-location').value = s?.location || '';
+  document.getElementById('supplier-notes').value    = s?.notes    || '';
+  supplierModalFillStockIn = !!(opts && opts.fillStockIn);
+  openModal('supplier-modal');
+}
+
+// When opened via "+ New Supplier" from inside Stock In, saving here should
+// also drop the new name straight into the Stock In supplier field instead
+// of making the manager close this modal and retype it.
+let supplierModalFillStockIn = false;
+
+async function saveWarehouseSupplierForm() {
+  const name     = document.getElementById('supplier-name').value.trim();
+  const phone    = document.getElementById('supplier-phone').value.trim();
+  const location = document.getElementById('supplier-location').value.trim();
+  const notes    = document.getElementById('supplier-notes').value.trim();
+  if (!name) { toast('Supplier name is required', 'error'); return; }
+  try {
+    const saved = await window.LumodaSupabase.saveWarehouseSupplier({
+      id: editingSupplierId, name, phone, location, notes,
+      created_by_name: whCurrentUserName()
+    });
+    if (typeof addAudit === 'function') addAudit('Warehouse Supplier Saved', `${whCurrentUserName()} ${editingSupplierId ? 'edited' : 'added'} supplier ${name}`);
+    closeModal('supplier-modal');
+    toast('Supplier saved');
+    await syncWarehouseCacheFromServer();
+    renderWarehouseSuppliers();
+    if (supplierModalFillStockIn) {
+      populateStockInSupplierDatalist();
+      const field = document.getElementById('wh-in-supplier');
+      if (field) field.value = saved?.name || name;
+    }
+  } catch (error) {
+    console.error('Save supplier failed:', error);
+    const msg = error?.code === '23505' ? 'A supplier with that name already exists' : (error.message || 'Could not save supplier');
+    toast(msg, 'error');
+  }
+}
+
+async function deleteSupplier(id) {
+  const s = getWarehouseSuppliersLocal().find(x => x.id === id);
+  if (!s) return;
+  if (!confirm(`Delete supplier "${s.name}"?`)) return;
+  try {
+    await window.LumodaSupabase.deleteWarehouseSupplier(id);
+    if (typeof addAudit === 'function') addAudit('Warehouse Supplier Deleted', `${whCurrentUserName()} deleted supplier ${s.name}`);
+    toast('Supplier deleted');
+    await syncWarehouseCacheFromServer();
+    renderWarehouseSuppliers();
+  } catch (error) {
+    console.error('Delete supplier failed:', error);
+    toast(error.message || 'Could not delete supplier', 'error');
+  }
+}
+
+// ============================================================
 // OPENING BALANCE / CSV
 // ============================================================
 // Every write action needs one specific target warehouse — block with a
@@ -989,6 +1140,98 @@ async function importWarehouseCsv() {
   }
 }
 
+// ============================================================
+// CYCLE COUNT
+// Reconcile physical counts against system records, a handful of items
+// at a time (a shelf, a category) rather than the whole warehouse at
+// once — only rows with a typed value get adjusted, everything else is
+// left untouched. Posts one combined stock_in (for surpluses found) and
+// one combined stock_out (for shortages found), same pattern as multi-
+// item Stock In/Out, both of which now auto-execute immediately.
+// ============================================================
+let cycleCountSearch = '';
+
+function openWarehouseCycleCountModal() {
+  if (!requireActiveWarehouse()) return;
+  cycleCountSearch = '';
+  const search = document.getElementById('wh-cyclecount-search');
+  if (search) search.value = '';
+  renderCycleCountRows();
+  openModal('warehouse-cyclecount-modal');
+}
+
+function filterCycleCount(val) {
+  cycleCountSearch = val;
+  renderCycleCountRows();
+}
+
+function renderCycleCountRows() {
+  const container = document.getElementById('wh-cyclecount-rows');
+  if (!container) return;
+  const q = cycleCountSearch.toLowerCase().trim();
+  const items = getScopedWarehouseBalances().filter(b =>
+    !q || String(b.itemName || '').toLowerCase().includes(q) || String(b.itemCode || '').toLowerCase().includes(q)
+  );
+  container.innerHTML = items.length ? items.map(b => `
+    <tr data-item-code="${escAttr(b.itemCode)}" data-item-name="${escAttr(b.itemName)}" data-system-count="${Number(b.availableCartons || 0)}">
+      <td class="mono">${escapeHtml(b.itemCode)}</td>
+      <td>${escapeHtml(b.itemName)}</td>
+      <td class="mono" style="text-align:center;color:var(--gray-400)">${Number(b.availableCartons || 0)}</td>
+      <td><input type="number" min="0" class="form-input cc-actual-input" style="max-width:90px" placeholder="—"></td>
+    </tr>
+  `).join('') : `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:20px">No items match</td></tr>`;
+}
+
+async function saveWarehouseCycleCount() {
+  if (!requireActiveWarehouse()) return;
+  const rows = [...document.querySelectorAll('#wh-cyclecount-rows tr[data-item-code]')];
+  const increases = [];
+  const decreases = [];
+
+  rows.forEach(tr => {
+    const input = tr.querySelector('.cc-actual-input');
+    const raw = input ? input.value.trim() : '';
+    if (raw === '') return; // not counted this round — leave untouched
+    const actual = Number(raw);
+    if (!Number.isFinite(actual) || actual < 0) return;
+    const systemCount = Number(tr.dataset.systemCount || 0);
+    const delta = actual - systemCount;
+    if (delta === 0) return;
+    const entry = { itemCode: tr.dataset.itemCode, description: tr.dataset.itemName, cartons: Math.abs(delta) };
+    (delta > 0 ? increases : decreases).push(entry);
+  });
+
+  if (!increases.length && !decreases.length) { toast('No count differences to save', 'error'); return; }
+
+  try {
+    if (increases.length) {
+      const result = await window.LumodaSupabase.postWarehouseMovementDirect({
+        type: 'stock_in', description: 'Cycle count — surplus found', notes: 'Physical count reconciliation',
+        cartons: increases.reduce((sum, i) => sum + i.cartons, 0),
+        created_by_name: whCurrentUserName(), warehouse_id: currentWarehouseId, items: increases
+      });
+      if (!result?.success) { toast(result?.error || 'Cycle count save failed', 'error'); return; }
+    }
+    if (decreases.length) {
+      const result = await window.LumodaSupabase.postWarehouseMovementDirect({
+        type: 'stock_out', description: 'Cycle count — shortage found', notes: 'Physical count reconciliation',
+        cartons: decreases.reduce((sum, i) => sum + i.cartons, 0),
+        created_by_name: whCurrentUserName(), warehouse_id: currentWarehouseId, items: decreases
+      });
+      if (!result?.success) { toast(result?.error || 'Cycle count save failed', 'error'); return; }
+    }
+    const total = increases.length + decreases.length;
+    if (typeof addAudit === 'function') addAudit('Warehouse Cycle Count', `${whCurrentUserName()} reconciled ${total} item(s) via cycle count`);
+    closeModal('warehouse-cyclecount-modal');
+    toast(`${total} item(s) reconciled`);
+    await syncWarehouseCacheFromServer();
+    renderWarehouse();
+  } catch (error) {
+    console.error('Cycle count save failed:', error);
+    toast(error.message || 'Cycle count save failed', 'error');
+  }
+}
+
 async function saveWarehouseOpeningBalance() {
   const description = document.getElementById('wh-ob-description').value.trim();
   const codeRaw     = document.getElementById('wh-ob-code').value.trim();
@@ -1019,7 +1262,39 @@ async function saveWarehouseOpeningBalance() {
 // ============================================================
 let warehouseStockInItems = [];
 
-function openWarehouseStockInModal() {
+// One-tap reorder from a Low Stock row — pre-fills Stock In with the item
+// and a suggested quantity so the manager doesn't have to search for it
+// again. Supplier is deliberately left blank; Stock In's existing
+// required-supplier check still applies, so this can't skip a required field.
+async function quickReorderFromLowStock(itemCode, warehouseId) {
+  if (warehouseId && warehouseId !== currentWarehouseId) {
+    currentWarehouseId = warehouseId;
+    await renderWarehouse();
+  }
+  if (!requireActiveWarehouse()) return;
+  const item = getScopedWarehouseBalances().find(b => b.itemCode === itemCode);
+  if (!item) { toast('Item not found', 'error'); return; }
+  const reorder   = Number(item.reorderLevel || getDefaultReorderLevel());
+  const available = Number(item.availableCartons || 0);
+  // Restock to 2x the reorder level so it clears the "low" threshold instead
+  // of just touching it — always at least 1 carton.
+  const suggested = Math.max(reorder * 2 - available, reorder, 1);
+  openWarehouseStockInModal({ itemCode: item.itemCode, description: item.itemName, cartons: suggested });
+  toast('Pre-filled from Low Stock — adjust quantity/supplier and save');
+}
+
+function populateStockInSupplierDatalist() {
+  const list = document.getElementById('wh-in-supplier-datalist');
+  if (!list) return;
+  list.innerHTML = getWarehouseSuppliersLocal().map(s =>
+    `<option value="${escapeHtml(s.name)}"></option>`
+  ).join('');
+}
+
+// `prefill` (optional): { itemCode, description, cartons } — used by the
+// one-tap "reorder" action from a Low Stock row so the manager doesn't have
+// to search for the item again.
+function openWarehouseStockInModal(prefill) {
   if (!requireActiveWarehouse()) return;
   warehouseStockInItems = [];
   document.getElementById('wh-in-supplier').value = '';
@@ -1032,9 +1307,10 @@ function openWarehouseStockInModal() {
       `<option value="${escapeHtml(item.itemName)}">${escapeHtml(item.itemName)} (${escapeHtml(item.itemCode)})</option>`
     ).join('');
   }
+  populateStockInSupplierDatalist();
 
-  // Add first row and render
-  _addStockInRow();
+  // Add first row (pre-filled if given) and render
+  _addStockInRow(prefill || {});
   openModal('warehouse-stockin-modal');
 }
 
@@ -1347,6 +1623,152 @@ async function saveWarehouseStockOut() {
 }
 
 // ============================================================
+// TRANSFER — move stock between two warehouses as one tracked action
+// instead of a manual Stock Out + Stock In pair. Only the source warehouse
+// needs can_access_warehouse() (enforced server-side); the destination list
+// comes from every active warehouse, not just ones the manager is assigned
+// to (see 20260805101500_warehouse_transfers.sql).
+// ============================================================
+let warehouseTransferItems = [];
+
+function openWarehouseTransferModal() {
+  if (!requireActiveWarehouse()) return;
+  warehouseTransferItems = [];
+  const destSelect = document.getElementById('wh-transfer-destination');
+  if (destSelect) {
+    const destinations = getWarehousesLocal().filter(w => w.active && w.id !== currentWarehouseId);
+    destSelect.innerHTML = destinations.length
+      ? destinations.map(w => `<option value="${escAttr(w.id)}">${escapeHtml(w.name)}</option>`).join('')
+      : `<option value="">No other active warehouse</option>`;
+  }
+  document.getElementById('wh-transfer-notes').value = '';
+  _addTransferRow();
+  openModal('warehouse-transfer-modal');
+}
+
+function _addTransferRow() {
+  warehouseTransferItems.push({ itemCode: '', description: '', cartons: '' });
+  _renderTransferRows();
+}
+
+function _removeTransferRow(index) {
+  warehouseTransferItems.splice(index, 1);
+  _renderTransferRows();
+}
+
+function _updateTransferItem(index, field, value) {
+  if (!warehouseTransferItems[index]) return;
+  warehouseTransferItems[index][field] = field === 'cartons' ? Number(value || 0) : value;
+}
+
+function _selectTransferItem(index, value) {
+  if (!warehouseTransferItems[index]) return;
+  warehouseTransferItems[index].description = value;
+  const q    = value.toLowerCase().trim();
+  const item = getScopedWarehouseBalances().find(x =>
+    String(x.itemName || '').toLowerCase() === q ||
+    String(x.itemCode || '').toLowerCase() === q
+  );
+  if (item) {
+    warehouseTransferItems[index].itemCode    = item.itemCode;
+    warehouseTransferItems[index].description = item.itemName;
+    _renderTransferRows();
+  }
+}
+
+function _renderTransferRows() {
+  const container = document.getElementById('wh-transfer-rows-container');
+  if (!container) return;
+  // Source-scoped — only stock physically in the current warehouse can leave it.
+  const sourceBalances = getScopedWarehouseBalances();
+  container.innerHTML = warehouseTransferItems.map((item, index) => `
+    <tr>
+      <td style="min-width:130px">
+        <input class="form-input" style="min-width:110px"
+          value="${escapeHtml(item.itemCode || '')}"
+          oninput="_updateTransferItem(${index}, 'itemCode', this.value)"
+          placeholder="Item code">
+      </td>
+      <td style="min-width:280px">
+        <input class="form-input" style="min-width:260px"
+          list="wt-list-${index}"
+          value="${escapeHtml(item.description || '')}"
+          oninput="_selectTransferItem(${index}, this.value)"
+          placeholder="Search product name">
+        <datalist id="wt-list-${index}">
+          ${sourceBalances.map(p =>
+            `<option value="${escapeHtml(p.itemName)}">${escapeHtml(p.itemName)} (${escapeHtml(p.itemCode)}) — Available: ${p.availableCartons}</option>`
+          ).join('')}
+        </datalist>
+      </td>
+      <td style="min-width:120px">
+        <input class="form-input" type="number" min="1"
+          style="min-width:100px"
+          value="${item.cartons || ''}"
+          oninput="_updateTransferItem(${index}, 'cartons', this.value)"
+          placeholder="Cartons">
+      </td>
+      <td style="width:50px;text-align:center">
+        <button class="remove-btn" onclick="_removeTransferRow(${index})">×</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function saveWarehouseTransfer() {
+  const destId = document.getElementById('wh-transfer-destination').value;
+  const notes  = document.getElementById('wh-transfer-notes').value.trim();
+  if (!destId) { toast('Choose a destination warehouse', 'error'); return; }
+
+  const validItems = warehouseTransferItems
+    .map(item => ({
+      itemCode:    whSafeCode(item.itemCode, item.description),
+      description: String(item.description || '').trim(),
+      cartons:     Number(item.cartons || 0)
+    }))
+    .filter(item => item.description && item.cartons > 0);
+
+  if (!validItems.length) { toast('Add at least one item with a quantity', 'error'); return; }
+
+  for (const reqItem of validItems) {
+    const stockItem = getScopedWarehouseBalances().find(x =>
+      String(x.itemCode || '').toLowerCase() === String(reqItem.itemCode || '').toLowerCase()
+    );
+    if (!stockItem) { toast(`Item not found in warehouse: ${reqItem.description}`, 'error'); return; }
+    if (Number(reqItem.cartons || 0) > Number(stockItem.availableCartons || 0)) {
+      toast(`Not enough stock for ${reqItem.description} (available: ${stockItem.availableCartons})`, 'error');
+      return;
+    }
+  }
+
+  const destName     = getWarehousesLocal().find(w => w.id === destId)?.name || 'destination warehouse';
+  const totalCartons = validItems.reduce((sum, item) => sum + Number(item.cartons || 0), 0);
+
+  try {
+    const result = await window.LumodaSupabase.postWarehouseMovementDirect({
+      type:            'transfer',
+      description:     `${validItems.length} item(s) transferred to ${destName}`,
+      cartons:         totalCartons,
+      notes,
+      created_by_name: whCurrentUserName(),
+      warehouse_id:    currentWarehouseId,
+      to_warehouse_id: destId,
+      items:           validItems
+    });
+
+    if (!result?.success) { toast(result?.error || 'Transfer failed', 'error'); return; }
+    if (typeof addAudit === 'function') addAudit('Warehouse Transfer', `${whCurrentUserName()} transferred ${totalCartons} carton(s) to ${destName}`);
+    closeModal('warehouse-transfer-modal');
+    toast('Transfer saved');
+    await syncWarehouseCacheFromServer();
+    renderWarehouse();
+  } catch (error) {
+    console.error('Transfer failed:', error);
+    toast(error.message || 'Transfer failed', 'error');
+  }
+}
+
+// ============================================================
 // VIEW / PRINT REQUISITION
 // ============================================================
 function viewWarehouseReq(movementId) {
@@ -1359,9 +1781,14 @@ function viewWarehouseReq(movementId) {
   const isStockIn  = movement.type === 'stock_in';
   const isOpening  = movement.type === 'opening_balance';
   const isStockOut = movement.type === 'stock_out';
-  const title      = isStockIn ? 'Warehouse Stock In'
-                   : isOpening ? 'Warehouse Opening Balance'
+  const isTransfer = movement.type === 'transfer';
+  const title      = isStockIn  ? 'Warehouse Stock In'
+                   : isOpening  ? 'Warehouse Opening Balance'
+                   : isTransfer ? 'Warehouse Transfer'
                    : 'Warehouse Requisition / Stock Out';
+
+  const fromWarehouseName = getWarehousesLocal().find(w => w.id === movement.warehouseId)?.name || '—';
+  const toWarehouseName   = getWarehousesLocal().find(w => w.id === movement.toWarehouseId)?.name || '—';
 
   body.innerHTML = `
     <div style="margin-bottom:18px">
@@ -1371,6 +1798,8 @@ function viewWarehouseReq(movementId) {
         ${isStockIn  ? `<span style="color:var(--gray-400)">Supplier</span><span>${escapeHtml(movement.supplier || '—')}</span>` : ''}
         ${isStockOut ? `<span style="color:var(--gray-400)">Issue To</span><span>${escapeHtml(movement.issueTo || '—')}</span>` : ''}
         ${isStockOut ? `<span style="color:var(--gray-400)">Storekeeper</span><span>${escapeHtml(movement.storekeeper || '—')}</span>` : ''}
+        ${isTransfer ? `<span style="color:var(--gray-400)">From</span><span>${escapeHtml(fromWarehouseName)}</span>` : ''}
+        ${isTransfer ? `<span style="color:var(--gray-400)">To</span><span>${escapeHtml(toWarehouseName)}</span>` : ''}
         <span style="color:var(--gray-400)">Type</span><span>${escapeHtml(formatWarehouseType(movement.type))}</span>
         <span style="color:var(--gray-400)">Status</span><span>${warehouseStatusBadge(movement.status)}</span>
         <span style="color:var(--gray-400)">By</span><span>${escapeHtml(movement.createdByName || '—')}</span>
@@ -1393,7 +1822,7 @@ function viewWarehouseReq(movementId) {
           </tr>`).join('')}
         <tr style="border-top:2px solid var(--gray-200)">
           <td colspan="2" style="text-align:right;font-weight:600;padding:10px 13px">Total Cartons</td>
-          <td class="mono" style="text-align:right;font-weight:700;font-size:15px;color:var(--brand-brown)">
+          <td class="mono" style="text-align:right;font-weight:700;font-size:15px;color:var(--accent)">
             ${(movement.items || []).reduce((s, i) => s + Number(i.cartons || 0), 0)}
           </td>
         </tr>
@@ -1415,7 +1844,7 @@ function printWarehouseReq() {
   printArea.innerHTML = `
     <div style="font-family:Arial,sans-serif;font-size:12px;color:#000;max-width:760px;margin:0 auto">
       <div style="background:#5C2D0A;color:white;padding:12px 16px;text-align:center">
-        <div style="font-size:18px;font-weight:700;letter-spacing:1px">LUMODA ENTERPRISE</div>
+        <div style="font-size:18px;font-weight:700;letter-spacing:1px">${escapeHtml(getBusinessName())}</div>
         <div style="font-style:italic;font-size:11px;opacity:.85">The cook's helper</div>
         <div style="font-size:10px;opacity:.75">Warehouse Movement Record</div>
       </div>
@@ -1454,10 +1883,6 @@ async function saveWarehouseProduct() {
     toast(error.message || 'Could not save item', 'error');
   }
 }
-async function saveWarehouseSupplier(payload) {
-  if (!window.LumodaSupabase?.saveWarehouseSupplier) return null;
-  return window.LumodaSupabase.saveWarehouseSupplier(payload);
-}
 
 // ============================================================
 // GLOBAL EXPORTS
@@ -1490,3 +1915,14 @@ window.updateWarehouseMovementFilter  = updateWarehouseMovementFilter;
 window.loadMoreLowStock               = loadMoreLowStock;
 window.loadMoreBalance                = loadMoreBalance;
 window.filterBalanceSearch            = filterBalanceSearch;
+window.openWarehouseSupplierModal     = openWarehouseSupplierModal;
+window.saveWarehouseSupplierForm      = saveWarehouseSupplierForm;
+window.deleteSupplier                 = deleteSupplier;
+window.renderWarehouseSuppliers       = renderWarehouseSuppliers;
+window.openWarehouseTransferModal     = openWarehouseTransferModal;
+window.saveWarehouseTransfer          = saveWarehouseTransfer;
+window._addTransferRow                = _addTransferRow;
+window._removeTransferRow             = _removeTransferRow;
+window._updateTransferItem            = _updateTransferItem;
+window._selectTransferItem            = _selectTransferItem;
+window.quickReorderFromLowStock       = quickReorderFromLowStock;

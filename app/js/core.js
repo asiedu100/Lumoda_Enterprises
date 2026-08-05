@@ -242,11 +242,102 @@ function refreshAll() {
 }
 
 // ============================================================
+// LIGHT / DARK THEME
+// Personal, per-device preference (not synced to an account) — stored
+// locally so it applies instantly, including on the login screen before
+// anyone's signed in. 'light'/'dark' means the user picked explicitly;
+// unset means "follow the device's system setting" (handled in CSS via
+// prefers-color-scheme). Declared before Business Settings below because
+// applyBrandColor() needs isDarkActive() to already exist.
+// ============================================================
+function getThemePreference() { return LS.get('lumoda_theme') || null; }
+function isDarkActive() {
+  const explicit = document.documentElement.getAttribute('data-theme');
+  if (explicit) return explicit === 'dark';
+  return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+}
+function applyTheme(theme) {
+  if (theme === 'dark' || theme === 'light') document.documentElement.setAttribute('data-theme', theme);
+  else document.documentElement.removeAttribute('data-theme');
+  updateThemeToggleIcons();
+  // The brand colour needs to relighten/redarken whenever the theme
+  // changes, not just at page load — see applyBrandColor() below.
+  applyBrandColor(getBrandColor());
+}
+function updateThemeToggleIcons() {
+  const dark = isDarkActive();
+  document.querySelectorAll('.theme-toggle-icon').forEach(el => { el.textContent = dark ? '☀️' : '🌙'; });
+  document.querySelectorAll('.theme-toggle-btn').forEach(el => { el.setAttribute('aria-label', dark ? 'Switch to light mode' : 'Switch to dark mode'); });
+}
+function toggleTheme() {
+  const next = isDarkActive() ? 'light' : 'dark';
+  LS.set('lumoda_theme', next);
+  applyTheme(next);
+}
+
+// ============================================================
 // BUSINESS SETTINGS (cached at login by syncSupabaseCache — see auth.js)
 // ============================================================
 function getBusinessSettings()      { return LS.get('lumoda_business_settings') || null; }
 function getCurrencySymbol()        { return getBusinessSettings()?.currency_symbol || 'GH₵'; }
 function getDefaultReorderLevel()   { return Number(getBusinessSettings()?.default_reorder_level) || 10; }
+function getBrandColor()            { return getBusinessSettings()?.brand_color || '#5C2D0A'; }
+function lightenHexForDark(hex) {
+  const [r, g, b] = hex.slice(1).match(/.{2}/g).map(x => parseInt(x, 16));
+  const mix = v => Math.round(v + (255 - v) * 0.55);
+  return '#' + [mix(r), mix(g), mix(b)].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+// --brand-brown stays the raw colour, always — it's used as a BACKGROUND
+// (sidebar, buttons, active tab, avatar) that white text sits on top of,
+// so it needs to stay dark/saturated in both themes for that to work.
+// --accent is a second, separate token for the opposite case: brand
+// colour used as TEXT or a border sitting ON a card/surface (a heading,
+// an invoice total). That one needs to lighten in dark mode, or dark
+// brand-coloured text on a now-dark card becomes unreadable.
+function applyBrandColor(hex) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex || '')) return;
+  document.documentElement.style.setProperty('--brand-brown', hex);
+  document.documentElement.style.setProperty('--accent', isDarkActive() ? lightenHexForDark(hex) : hex);
+}
+function getLogoUrl()               { return getBusinessSettings()?.logo_url || null; }
+// Swaps the default diamond mark for an uploaded logo image, or restores
+// the default if none is set (or it was removed). Same pair of spots as
+// applyBrandColor: the login screen and the in-app sidebar.
+function applyLogo(url) {
+  [['auth-logo-svg', 'auth-logo-img'], ['sidebar-logo-svg', 'sidebar-logo-img']].forEach(([svgId, imgId]) => {
+    const svg = document.getElementById(svgId);
+    const img = document.getElementById(imgId);
+    if (!svg || !img) return;
+    if (url) { img.src = url; img.style.display = ''; svg.style.display = 'none'; }
+    else { img.removeAttribute('src'); img.style.display = 'none'; svg.style.display = ''; }
+  });
+}
+const DEFAULT_BUSINESS_NAME = 'LUMODA ENTERPRISE';
+function getBusinessName()          { return getBusinessSettings()?.business_name || DEFAULT_BUSINESS_NAME; }
+// Pushes the business name to every place it's hardcoded as static markup:
+// the browser tab title, the login screen heading, and the sidebar wordmark
+// (which is styled as two stacked lines for the default "LUMODA" /
+// "ENTERPRISE" — a custom name doesn't split the same way, so it just goes
+// on the first line with the second line cleared).
+function applyBusinessName(name) {
+  const businessName = name || DEFAULT_BUSINESS_NAME;
+  document.title = businessName;
+  const authEl = document.getElementById('auth-business-name');
+  if (authEl) authEl.textContent = businessName;
+  const line1 = document.getElementById('sidebar-business-name-1');
+  const line2 = document.getElementById('sidebar-business-name-2');
+  if (line1 && line2) {
+    if (businessName === DEFAULT_BUSINESS_NAME) { line1.textContent = 'LUMODA'; line2.textContent = 'ENTERPRISE'; }
+    else { line1.textContent = businessName; line2.textContent = ''; }
+  }
+}
+// Apply whatever was cached from the last login immediately, so a
+// returning admin doesn't see a flash of the default colour/logo/name/theme
+// before the next Supabase sync completes. Theme must apply first, since
+// applyBrandColor() checks isDarkActive().
+applyTheme(getThemePreference());
+applyLogo(getLogoUrl());
+applyBusinessName(getBusinessName());
 
 // ============================================================
 // FORMAT

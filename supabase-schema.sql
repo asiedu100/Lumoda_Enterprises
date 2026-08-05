@@ -1605,6 +1605,66 @@ set name = excluded.name,
     price = excluded.price,
     reorder_level = excluded.reorder_level;
 
+-- Business Settings — single-row table of business-wide config (name,
+-- contact info, currency symbol, default reorder level, brand accent
+-- colour), added directly on the live project after this file was first
+-- written. Read by every staff account; only admins can change it.
+create table if not exists public.business_settings (
+  id smallint primary key default 1 check (id = 1),
+  business_name text not null default '',
+  phone text not null default '',
+  address text not null default '',
+  currency_symbol text not null default 'GH₵',
+  default_reorder_level integer not null default 10,
+  brand_color text not null default '#5C2D0A',
+  logo_url text,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references public.profiles(id)
+);
+
+alter table public.business_settings enable row level security;
+
+drop policy if exists "business_settings_select" on public.business_settings;
+create policy "business_settings_select" on public.business_settings
+  for select to authenticated using (true);
+
+drop policy if exists "business_settings_admin_write" on public.business_settings;
+create policy "business_settings_admin_write" on public.business_settings
+  for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+grant select, insert, update on public.business_settings to authenticated;
+
+insert into public.business_settings (id)
+values (1)
+on conflict (id) do nothing;
+
+-- Personal "land here after login" preference, one column on profiles
+-- (nullable — falls back to a role-based default when unset).
+alter table public.profiles add column if not exists default_landing_page text;
+
+-- Storage bucket for the uploaded business logo. Public read (the login
+-- screen shows it before anyone is authenticated); only admins can upload,
+-- replace, or remove it.
+insert into storage.buckets (id, name, public)
+values ('branding', 'branding', true)
+on conflict (id) do nothing;
+
+drop policy if exists "branding_public_read" on storage.objects;
+create policy "branding_public_read" on storage.objects
+  for select using (bucket_id = 'branding');
+
+drop policy if exists "branding_admin_insert" on storage.objects;
+create policy "branding_admin_insert" on storage.objects
+  for insert to authenticated with check (bucket_id = 'branding' and public.is_admin());
+
+drop policy if exists "branding_admin_update" on storage.objects;
+create policy "branding_admin_update" on storage.objects
+  for update to authenticated using (bucket_id = 'branding' and public.is_admin());
+
+drop policy if exists "branding_admin_delete" on storage.objects;
+create policy "branding_admin_delete" on storage.objects
+  for delete to authenticated using (bucket_id = 'branding' and public.is_admin());
+
 do $$
 declare
   v_admin_id uuid;
@@ -1723,3 +1783,114 @@ where username = 'admin';
 --     location = excluded.location,
 --     active = excluded.active,
 --     email = excluded.email;
+
+-- ============================================================
+-- 20260805110000 / 20260805111500 / 20260805112000 — codebase-review fixes:
+-- close two live permission gaps, drop two now-fully-dead invoice
+-- functions, and make manual stock adjustment atomic.
+-- ============================================================
+
+-- invoice_payments_insert was `with check (true)` — any authenticated staff
+-- login could insert a payment row against ANY invoice, any branch, any
+-- amount, directly via the client SDK. The app never needs this: every real
+-- payment write goes through record_partial_payment() or the initial
+-- payment insert inside create_invoice_no_stock(), both security definer
+-- functions that don't need this grant/policy to keep working.
+revoke insert on public.invoice_payments from authenticated;
+
+drop policy if exists "invoice_payments_insert" on public.invoice_payments;
+create policy "invoice_payments_insert"
+on public.invoice_payments for insert
+to authenticated
+with check (false);
+
+-- create_invoice and soft_delete_invoice (the original, stock-aware
+-- versions) have zero callers — only their _no_stock successors are ever
+-- called. Stock enforcement on sale was reviewed and explicitly left as-is,
+-- so these aren't needed as a reference either. Dropped.
+drop function if exists public.create_invoice(
+  text, public.branch_location, jsonb, text, text, public.invoice_status, public.payment_method, text, text
+);
+drop function if exists public.soft_delete_invoice(uuid);
+
+-- applyStockAdjustment() used to read the cached stock value, compute a new
+-- absolute number client-side, and write it back via a plain upsert plus a
+-- separate fire-and-forget stock_history insert — two concurrent
+-- adjustments could both read the same stale value and the second write
+-- would silently clobber the first. This function does the read-check-write
+-- and the stock_history insert together, atomically, row-locked,
+-- server-side.
+create or replace function public.adjust_product_stock(
+  p_product_id uuid,
+  p_location public.branch_location,
+  p_delta integer,
+  p_type text default 'Correction',
+  p_note text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user uuid := auth.uid();
+  v_product public.products%rowtype;
+  v_new_stock integer;
+begin
+  if v_user is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  if not public.is_admin() then
+    raise exception 'Only admin can adjust stock';
+  end if;
+
+  if p_location not in ('Alabar', 'Morocco') then
+    raise exception 'Invalid location';
+  end if;
+
+  if p_delta = 0 then
+    raise exception 'Adjustment quantity must not be zero';
+  end if;
+
+  select * into v_product
+  from public.products
+  where id = p_product_id
+  for update;
+
+  if not found then
+    raise exception 'Product not found';
+  end if;
+
+  if p_location = 'Alabar' then
+    v_new_stock := v_product.stock_alabar + p_delta;
+    if v_new_stock < 0 then
+      raise exception 'Insufficient stock';
+    end if;
+    update public.products set stock_alabar = v_new_stock, updated_at = now() where id = p_product_id;
+  else
+    v_new_stock := v_product.stock_morocco + p_delta;
+    if v_new_stock < 0 then
+      raise exception 'Insufficient stock';
+    end if;
+    update public.products set stock_morocco = v_new_stock, updated_at = now() where id = p_product_id;
+  end if;
+
+  insert into public.stock_history (product_id, product_name, location, change, type, note, created_by)
+  values (
+    p_product_id, v_product.name, p_location, p_delta,
+    coalesce(nullif(trim(coalesce(p_type, '')), ''), 'Correction'),
+    coalesce(nullif(trim(coalesce(p_note, '')), ''), 'Manual ' || coalesce(p_type, 'adjustment')),
+    v_user
+  );
+
+  return jsonb_build_object(
+    'success', true,
+    'stock_alabar', case when p_location = 'Alabar' then v_new_stock else v_product.stock_alabar end,
+    'stock_morocco', case when p_location = 'Morocco' then v_new_stock else v_product.stock_morocco end
+  );
+end;
+$$;
+
+revoke execute on function public.adjust_product_stock(uuid, public.branch_location, integer, text, text) from public, anon;
+grant execute on function public.adjust_product_stock(uuid, public.branch_location, integer, text, text) to authenticated;

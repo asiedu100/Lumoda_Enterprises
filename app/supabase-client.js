@@ -84,6 +84,8 @@
       address:                payload.address,
       currency_symbol:        payload.currencySymbol,
       default_reorder_level:  Number(payload.defaultReorderLevel) || 0,
+      brand_color:            payload.brandColor,
+      logo_url:                payload.logoUrl,
       updated_at:             new Date().toISOString(),
       updated_by:             userData?.user?.id || null
     }).eq('id', 1).select().single();
@@ -97,6 +99,30 @@
     const { error } = await sb.from('profiles').update({ default_landing_page: page || null }).eq('id', userId);
     if (error) throw error;
     return true;
+  }
+
+  async function uploadLogo(file) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error: uploadError } = await sb.storage.from('branding').upload('logo', file, { upsert: true, cacheControl: '3600' });
+    if (uploadError) throw uploadError;
+    const { data } = sb.storage.from('branding').getPublicUrl('logo');
+    // Cache-bust so the new logo shows immediately instead of a browser's
+    // already-cached copy of the old image at the same URL.
+    return data.publicUrl + '?v=' + Date.now();
+  }
+
+  async function saveLogoUrl(url) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data: userData } = await sb.auth.getUser();
+    const { data, error } = await sb.from('business_settings').update({
+      logo_url:   url,
+      updated_at: new Date().toISOString(),
+      updated_by: userData?.user?.id || null
+    }).eq('id', 1).select().single();
+    if (error) throw error;
+    return data;
   }
 
   function toLocalProduct(row) {
@@ -293,6 +319,39 @@
     const basicRow = { name: row.name, sku: row.sku, category: row.category, price: row.price, stock_alabar: row.stock_alabar, stock_morocco: row.stock_morocco, reorder_level: row.reorder_level, updated_at: row.updated_at };
     if (row.id) basicRow.id = row.id;
     return sb.from('products').upsert(basicRow, { onConflict: basicRow.id ? 'id' : 'sku' }).select().single();
+  }
+
+  async function adjustProductStock({ productId, location, delta, type, note }) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.rpc('adjust_product_stock', {
+      p_product_id: productId,
+      p_location:   location,
+      p_delta:      Number(delta || 0),
+      p_type:       type || 'Correction',
+      p_note:       note || null
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function linkCatalogItem(productId, warehouseProductId) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.rpc('link_catalog_item', {
+      p_product_id: productId,
+      p_warehouse_product_id: warehouseProductId
+    });
+    if (error) throw error;
+    return data;
+  }
+
+  async function backfillWarehouseCatalog() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb.rpc('backfill_warehouse_catalog_from_products');
+    if (error) throw error;
+    return data;
   }
 
   async function softDeleteInvoiceNoStock(invoiceId) {
@@ -593,17 +652,8 @@
       p_supplier:        payload.supplier        || null,
       p_notes:           payload.notes           || null,
       p_created_by_name: payload.created_by_name || null,
-      p_warehouse_id:    payload.warehouse_id    || null
-    });
-    if (error) throw error;
-    return data;
-  }
-
-  async function approveWarehouseMovement(movementId, approved = true, reason = null) {
-    const sb = getClient();
-    if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb.rpc('approve_warehouse_movement', {
-      p_movement_id: movementId, p_approved: approved, p_rejection_reason: reason
+      p_warehouse_id:    payload.warehouse_id    || null,
+      p_to_warehouse_id: payload.to_warehouse_id || null
     });
     if (error) throw error;
     return data;
@@ -652,7 +702,7 @@
   async function saveWarehouseSupplier(payload) {
     const sb = getClient();
     if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb.from('warehouse_suppliers').upsert({
+    const row = {
       name:            payload.name,
       phone:           payload.phone    || null,
       location:        payload.location || null,
@@ -660,9 +710,21 @@
       created_by:      payload.created_by || null,
       created_by_name: payload.created_by_name || null,
       updated_at:      new Date().toISOString()
-    }, { onConflict: 'name' }).select().single();
+    };
+    if (payload.id) row.id = payload.id;
+    const { data, error } = await sb.from('warehouse_suppliers')
+      .upsert(row, { onConflict: row.id ? 'id' : 'name' })
+      .select().single();
     if (error) throw error;
     return data;
+  }
+
+  async function deleteWarehouseSupplier(id) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { error } = await sb.from('warehouse_suppliers').delete().eq('id', id);
+    if (error) throw error;
+    return true;
   }
 
   async function loadWarehouseMovements(warehouseId) {
@@ -768,6 +830,8 @@
     loadBusinessSettings,
     saveBusinessSettings,
     saveMyDefaultLandingPage,
+    uploadLogo,
+    saveLogoUrl,
 
     signIn,
     signOut,
@@ -792,6 +856,9 @@
 
     importProducts,
     saveProduct,
+    adjustProductStock,
+    linkCatalogItem,
+    backfillWarehouseCatalog,
 
     // FIX BUG 3: audit + stock history
     logAudit,
@@ -808,11 +875,11 @@
     saveWarehouseProduct,
     deleteWarehouseProduct,
     saveWarehouseSupplier,
+    deleteWarehouseSupplier,
     loadWarehouseMovements,
     loadWarehouseProducts,
     loadWarehouseSuppliers,
     postWarehouseMovementDirect,
-    approveWarehouseMovement,
     loadWarehouseStockBalance,
 
     loadWarehouses,

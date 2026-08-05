@@ -42,7 +42,7 @@
 <div id="auth-screen" class="full-screen">
   <div class="auth-card">
     <div style="text-align:center;margin-bottom:20px">
-      <svg width="76" height="76" viewBox="0 0 96 96" fill="none">
+      <svg id="auth-logo-svg" width="76" height="76" viewBox="0 0 96 96" fill="none">
         <defs><clipPath id="dc"><rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)"/></clipPath></defs>
         <rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)" fill="#5C2D0A"/>
         <polygon points="48,8 80,48 48,48" fill="#F5B800" clip-path="url(#dc)"/>
@@ -50,9 +50,10 @@
         <polygon points="48,48 80,48 48,88" fill="#7AB033" clip-path="url(#dc)"/>
         <polygon points="48,48 48,88 16,48" fill="#4A2208" clip-path="url(#dc)"/>
       </svg>
-      <div style="font-size:25px;font-weight:700;color:#5C2D0A;letter-spacing:.08em;margin-top:6px">LUMODA ENTERPRISE</div>
-      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:13px;color:#9a9890;margin-top:2px">The cook's helper</div>
-      <div style="font-size:9px;color:#C8291C;font-weight:600;letter-spacing:.1em;margin-top:5px;font-family:'DM Mono',monospace">  MAA LUCY'S PLACE</div>
+      <img id="auth-logo-img" style="display:none;width:76px;height:76px;object-fit:contain;margin:0 auto" alt="Logo">
+      <div id="auth-business-name" style="font-size:25px;font-weight:700;color:var(--accent);letter-spacing:.08em;margin-top:6px">LUMODA ENTERPRISE</div>
+      <div style="font-family:'Instrument Serif',serif;font-style:italic;font-size:13px;color:var(--gray-400);margin-top:2px">The cook's helper</div>
+      <div style="font-size:9px;color:var(--brand-red);font-weight:600;letter-spacing:.1em;margin-top:5px;font-family:'DM Mono',monospace">  MAA LUCY'S PLACE</div>
     </div>
     <label class="auth-label">Username</label>
     <input class="auth-input" id="auth-user" placeholder="Your username" autocomplete="off" onkeydown="if(event.key==='Enter')document.getElementById('auth-pass').focus()">
@@ -71,7 +72,7 @@
   font-size:16px;
   font-family:'DM Mono', monospace;
   letter-spacing:.08em;
-  color:#333;
+  color:var(--gray-600);
   font-weight:1000;
 ">
   Powered by MRASYSTEMS
@@ -110,7 +111,7 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-logo">
       <div style="display:flex;align-items:center;gap:10px;padding-bottom:13px">
-        <svg width="32" height="32" viewBox="0 0 34 34" fill="none">
+        <svg id="sidebar-logo-svg" width="32" height="32" viewBox="0 0 34 34" fill="none">
           <defs><clipPath id="sc"><rect x="5" y="5" width="24" height="24" rx="3" transform="rotate(45 17 17)"/></clipPath></defs>
           <rect x="5" y="5" width="24" height="24" rx="3" transform="rotate(45 17 17)" fill="rgba(255,255,255,.15)"/>
           <polygon points="17,2 28,17 17,17" fill="#F5B800" clip-path="url(#sc)"/>
@@ -118,9 +119,10 @@
           <polygon points="17,17 28,17 17,32" fill="#7AB033" clip-path="url(#sc)"/>
           <polygon points="17,17 17,32 6,17" fill="rgba(255,255,255,.2)" clip-path="url(#sc)"/>
         </svg>
+        <img id="sidebar-logo-img" style="display:none;width:32px;height:32px;object-fit:contain;border-radius:6px" alt="Logo">
         <div>
-          <div style="font-size:15px;font-weight:700;color:var(--white);letter-spacing:.06em">LUMODA</div>
-          <div style="font-size:9px;color:rgba(255,255,255,.32);letter-spacing:.08em;font-family:'DM Mono',monospace">ENTERPRISE</div>
+          <div id="sidebar-business-name-1" style="font-size:15px;font-weight:700;color:var(--white);letter-spacing:.06em">LUMODA</div>
+          <div id="sidebar-business-name-2" style="font-size:9px;color:rgba(255,255,255,.32);letter-spacing:.08em;font-family:'DM Mono',monospace">ENTERPRISE</div>
         </div>
       </div>
     </div>
@@ -204,6 +206,7 @@
         <div class="loc-tab" data-loc="Alabar" onclick="switchLocFilter('Alabar',this)">Alabar</div>
         <div class="loc-tab" data-loc="Morocco" onclick="switchLocFilter('Morocco',this)">Morocco</div>
       </div>
+      <button type="button" class="theme-toggle-btn theme-toggle-icon" onclick="toggleTheme()" aria-label="Switch to dark mode" style="background:none;border:none;cursor:pointer;font-size:16px;padding:6px;width:32px;height:32px;border-radius:var(--radius);display:flex;align-items:center;justify-content:center;color:var(--gray-600)">🌙</button>
       <div class="topbar-user" onclick="navigate('settings', document.querySelector('.nav-item[data-page=&quot;settings&quot;]'))">
         <div class="user-avatar" id="topbar-avatar">A</div>
         <div>
@@ -292,6 +295,7 @@
             <div class="search-wrap"><input type="text" placeholder="Search products…" oninput="filterProducts(this.value)"></div>
             <div style="flex:1"></div>
             <button class="btn btn-secondary btn-sm" id="btn-order-stock" onclick="orderStock()" style="display:none">📋 Order Stock</button>
+            <button class="btn btn-secondary btn-sm" id="btn-link-warehouse" onclick="openCatalogLinkModal()" style="display:none">🔗 Link to Warehouse Catalog</button>
             <button class="btn btn-secondary btn-sm" id="btn-import-csv" onclick="openCsvModal()" style="display:none">⬆ Import CSV</button>
             <button class="btn btn-primary" id="btn-add-product" onclick="openProductModal()" style="display:none">+ New Product</button>
           </div>
@@ -430,6 +434,11 @@
             </div>
             <button class="btn btn-primary btn-sm" onclick="saveMyLandingPagePref()">Save</button>
             <div style="margin-top:22px;padding-top:20px;border-top:1px solid var(--gray-100)">
+              <label class="form-label" style="display:block;margin-bottom:8px">Appearance</label>
+              <button type="button" class="btn btn-secondary btn-sm theme-toggle-btn" onclick="toggleTheme()" aria-label="Switch to dark mode"><span class="theme-toggle-icon">🌙</span> Toggle Light / Dark</button>
+              <div style="font-size:11px;color:var(--gray-400);margin-top:5px">Applies on this device only, right away — including before you log in.</div>
+            </div>
+            <div style="margin-top:22px;padding-top:20px;border-top:1px solid var(--gray-100)">
               <label class="form-label" style="display:block;margin-bottom:8px">Password</label>
               <button class="btn btn-secondary btn-sm" onclick="openChangeMyPassword()">🔑 Change Password</button>
             </div>
@@ -447,6 +456,28 @@
             <div class="form-group"><label class="form-label">Address</label><input class="form-input" id="set-address"></div>
             <div class="form-group"><label class="form-label">Currency Symbol</label><input class="form-input" id="set-currency" style="max-width:100px"></div>
             <div class="form-group"><label class="form-label">Default Reorder Level</label><input class="form-input" type="number" id="set-reorder" style="max-width:100px"></div>
+            <div class="form-group">
+              <label class="form-label">Brand Colour</label>
+              <div style="display:flex;align-items:center;gap:10px">
+                <input type="color" id="set-brand-color" style="width:44px;height:34px;padding:2px;border:1px solid var(--gray-200);border-radius:var(--radius);cursor:pointer;background:none" onchange="previewBrandColor()">
+                <span class="mono" style="font-size:12px;color:var(--gray-400)" id="set-brand-color-hex">#5C2D0A</span>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Logo</label>
+              <div style="display:flex;align-items:center;gap:12px">
+                <div style="width:48px;height:48px;border:1px solid var(--gray-200);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--gray-50);flex-shrink:0">
+                  <img id="set-logo-preview" style="display:none;width:100%;height:100%;object-fit:contain" alt="Logo preview">
+                  <span id="set-logo-preview-empty" style="font-size:9px;color:var(--gray-400);font-family:var(--font-mono)">NONE</span>
+                </div>
+                <div>
+                  <input type="file" id="set-logo-file" accept="image/png,image/jpeg,image/svg+xml,image/webp" style="display:none" onchange="uploadLogoFile()">
+                  <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('set-logo-file').click()">Upload Logo</button>
+                  <button type="button" class="btn btn-secondary btn-sm" id="set-logo-remove-btn" style="display:none" onclick="removeLogo()">Remove</button>
+                  <div style="font-size:11px;color:var(--gray-400);margin-top:5px">PNG, JPG, SVG or WEBP</div>
+                </div>
+              </div>
+            </div>
             <div class="form-error" id="set-business-error" style="display:none;color:#c0392b;font-size:12px;margin-bottom:10px"></div>
             <button class="btn btn-primary" onclick="saveBusinessSettingsForm()">Save Business Settings</button>
           </div>
@@ -524,7 +555,7 @@
       🏪 Retail
     </div>
     <div id="ctype-wholesale" onclick="selectCustomerType('wholesale')"
-      style="flex:1;padding:9px;border:2px solid var(--brand-brown);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--brand-brown)">
+      style="flex:1;padding:9px;border:2px solid var(--accent);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--accent)">
       📦 Wholesale
     </div>
     <div id="ctype-carton" onclick="selectCustomerType('carton')"
@@ -557,7 +588,7 @@
 <div class="form-group" id="inv-fg-tendered" style="display:none;margin-top:10px">
   <label class="form-label">Cash Tendered (GH₵)</label>
   <input class="form-input" id="inv-cash-tendered" type="number" min="0" placeholder="Amount handed over by customer" oninput="updateChangeDisplay()">
-  <div id="inv-change-display" style="margin-top:6px;font-size:13px;font-weight:600;color:var(--brand-brown)"></div>
+  <div id="inv-change-display" style="margin-top:6px;font-size:13px;font-weight:600;color:var(--accent)"></div>
 </div>
 
 <div class="form-group" style="margin-top:10px">
@@ -733,6 +764,35 @@
   </div>
 </div>
 
+<!-- Link Product/Warehouse Catalog Modal -->
+<div class="modal-overlay" id="catalog-link-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Link Products to Warehouse Catalog</div>
+      <button class="modal-close" onclick="closeModal('catalog-link-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--gray-400);margin-bottom:12px">
+        Proposed matches are based on an exact product name match. Confirm the ones that are really
+        the same item — this links their codes and moves any existing warehouse stock over to the
+        shared code. Skip anything that isn't actually the same product.
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius);max-height:360px;overflow-y:auto">
+        <table style="margin:0">
+          <thead>
+            <tr><th>Product (branch)</th><th>Warehouse item</th><th></th></tr>
+          </thead>
+          <tbody id="catalog-link-rows"></tbody>
+        </table>
+      </div>
+      <div id="catalog-link-remaining" style="margin-top:14px;padding:12px;background:var(--gray-50);border-radius:var(--radius);font-size:13px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('catalog-link-modal')">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Create User Modal -->
 <div class="modal-overlay" id="create-user-modal">
   <div class="modal modal-sm">
@@ -805,7 +865,7 @@
         <button class="btn btn-secondary btn-sm" onclick="downloadCsvTemplate()">⬇ Template</button>
       </div>
       <div id="csv-preview" style="display:none">
-        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--brand-brown)" id="csv-preview-title"></div>
+        <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--accent)" id="csv-preview-title"></div>
         <div style="overflow-x:auto;max-height:260px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
           <table><thead><tr><th>Name</th><th>SKU</th><th>Category</th><th>Price</th><th>Alabar</th><th>Morocco</th><th>Reorder</th><th>Action</th></tr></thead><tbody id="csv-preview-body"></tbody></table>
         </div>
@@ -869,8 +929,12 @@
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label class="form-label">Supplier Name *</label>
-        <input class="form-input" id="wh-in-supplier" placeholder="e.g. Adom Trading">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <label class="form-label" style="margin:0">Supplier Name *</label>
+          <button type="button" class="btn btn-secondary btn-sm" onclick="openWarehouseSupplierModal(null, {fillStockIn:true})">+ New Supplier</button>
+        </div>
+        <input class="form-input" id="wh-in-supplier" list="wh-in-supplier-datalist" placeholder="e.g. Adom Trading — pick a saved one or type a new name">
+        <datalist id="wh-in-supplier-datalist"></datalist>
       </div>
       <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
         <label class="form-label" style="margin:0">Items Received *</label>
@@ -1102,6 +1166,49 @@
   </div>
 </div>
 
+<!-- Warehouse Transfer Modal -->
+<div class="modal-overlay" id="warehouse-transfer-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <div class="modal-title">Warehouse Transfer</div>
+      <button class="modal-close" onclick="closeModal('warehouse-transfer-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">Destination Warehouse *</label>
+        <select class="form-select" id="wh-transfer-destination"></select>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px">
+        <label class="form-label" style="margin:0">Items to Transfer *</label>
+        <button class="btn btn-secondary btn-sm" onclick="_addTransferRow()">+ Add Item</button>
+      </div>
+      <div style="overflow-x:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+        <table style="margin:0">
+          <thead>
+            <tr>
+              <th>Item Code</th>
+              <th>Description of Goods</th>
+              <th>Cartons</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="wh-transfer-rows-container"></tbody>
+        </table>
+      </div>
+      <div class="form-group" style="margin-top:14px">
+        <label class="form-label">Notes</label>
+        <textarea class="form-textarea" id="wh-transfer-notes" placeholder="Optional notes"></textarea>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-transfer-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseTransfer()">Save Transfer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 
 <!-- Warehouse Product Modal -->
 <div class="modal-overlay" id="warehouse-product-modal">
@@ -1146,11 +1253,12 @@
 <div class="modal-overlay" id="supplier-modal">
   <div class="modal modal-sm">
     <div class="modal-header">
-      <div class="modal-title">Add Supplier</div>
+      <div class="modal-title" id="supplier-modal-title">Add Supplier</div>
       <button class="modal-close" onclick="closeModal('supplier-modal')">×</button>
     </div>
 
     <div class="modal-body">
+      <input type="hidden" id="supplier-id">
       <div class="form-group">
         <label class="form-label">Supplier Name *</label>
         <input class="form-input" id="supplier-name" placeholder="e.g. Adom Trading">
@@ -1175,7 +1283,7 @@
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('supplier-modal')">Cancel</button>
       <div class="modal-footer-right">
-        <button class="btn btn-primary" onclick="saveSupplier()">Save Supplier</button>
+        <button class="btn btn-primary" onclick="saveWarehouseSupplierForm()">Save Supplier</button>
       </div>
     </div>
   </div>
@@ -1213,6 +1321,38 @@ KT001,Kettle,30,10,85</pre>
   </div>
 </div>
 
+<!-- Warehouse Cycle Count -->
+<div class="modal-overlay" id="warehouse-cyclecount-modal">
+  <div class="modal" style="width:640px">
+    <div class="modal-header">
+      <div class="modal-title">Cycle Count</div>
+      <button class="modal-close" onclick="closeModal('warehouse-cyclecount-modal')">×</button>
+    </div>
+    <div class="modal-body">
+      <div class="pw-hint" style="margin-bottom:12px">
+        Count what's actually on the shelf and enter it below — only items you type a number for get
+        adjusted, so you can check just a shelf or a category at a time. Leave the rest blank.
+      </div>
+      <div class="search-wrap" style="margin-bottom:10px;width:100%">
+        <input type="text" placeholder="Search items to count…" id="wh-cyclecount-search" oninput="filterCycleCount(this.value)" style="width:100%">
+      </div>
+      <div style="max-height:360px;overflow-y:auto;border:1px solid var(--gray-100);border-radius:var(--radius)">
+        <table>
+          <thead>
+            <tr><th>Code</th><th>Item</th><th style="text-align:center">System Count</th><th>Actual Count</th></tr>
+          </thead>
+          <tbody id="wh-cyclecount-rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('warehouse-cyclecount-modal')">Cancel</button>
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="saveWarehouseCycleCount()">Save Count</button>
+      </div>
+    </div>
+  </div>
+</div>
 
   </div>
 </div>

@@ -49,7 +49,7 @@ function selectCustomerType(type) {
 }
 
 function _updateCustomerTypePills(type) {
-  const on  = 'flex:1;padding:9px;border:2px solid var(--brand-brown);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--brand-brown)';
+  const on  = 'flex:1;padding:9px;border:2px solid var(--accent);border-radius:var(--radius);background:#fdf5ef;cursor:pointer;font-size:13px;font-weight:600;text-align:center;color:var(--accent)';
   const off = 'flex:1;padding:9px;border:1px solid var(--gray-200);border-radius:var(--radius);background:var(--white);cursor:pointer;font-size:13px;font-weight:500;text-align:center;color:var(--gray-600)';
   const rEl = document.getElementById('ctype-retail');
   const wEl = document.getElementById('ctype-wholesale');
@@ -180,7 +180,7 @@ function onStatusChange() {
 
 function selectPayMethod(method) {
   window._selectedPayMethod = method;
-  const on  = 'border:2px solid var(--brand-brown);border-radius:var(--radius);padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;text-align:center;background:var(--gray-50)';
+  const on  = 'border:2px solid var(--accent);border-radius:var(--radius);padding:10px 14px;cursor:pointer;font-size:13px;font-weight:600;text-align:center;background:var(--gray-50)';
   const off = 'border:1px solid var(--gray-200);border-radius:var(--radius);padding:10px 14px;cursor:pointer;font-size:13px;font-weight:500;text-align:center';
   document.getElementById('pm-cash').style.cssText = method==='cash' ? on : off;
   document.getElementById('pm-momo').style.cssText = method==='momo' ? on : off;
@@ -486,11 +486,11 @@ function buildInvoiceHTML(inv) {
     .fill('<tr><td style="padding:9px 10px">&nbsp;</td><td></td><td></td><td></td></tr>')
     .join('');
 
-  return '<div style="border:2px solid var(--brand-brown);border-radius:var(--radius);overflow:hidden;margin-bottom:14px">' +
+  return '<div style="border:2px solid var(--accent);border-radius:var(--radius);overflow:hidden;margin-bottom:14px">' +
 
     '<div style="background:var(--brand-brown);color:white;padding:8px 14px;display:flex;justify-content:space-between;align-items:flex-start;gap:10px">' +
       '<div>' +
-        '<div style="font-family:var(--font-serif);font-size:16px;font-weight:600;letter-spacing:.04em">LUMODA ENTERPRISE</div>' +
+        '<div style="font-family:var(--font-serif);font-size:16px;font-weight:600;letter-spacing:.04em">'+escapeHtml(getBusinessSettings()?.business_name || 'LUMODA ENTERPRISE')+'</div>' +
         '<div style="font-family:var(--font-serif);font-style:italic;font-size:11px;opacity:.8">The cook\'s helper</div>' +
         '<div style="font-size:10px;opacity:.7;margin-top:2px">Dealers in All Kinds of Kitchen Accessories</div>' +
       '</div>' +
@@ -499,7 +499,7 @@ function buildInvoiceHTML(inv) {
         '<div>LOC 1: Alabar, Ghana Region</div>' +
         '<div>Shop No. OCL/ZR/GF/A20 &amp; A21</div>' +
         '<div>LOC 2: Morocco (K.O) Old Barbers Bldg GF 26</div>' +
-        '<div>TEL: 0244369357 / 0546014044 / 0243563481</div>' +
+        '<div>TEL: '+escapeHtml(getBusinessSettings()?.phone || '0244369357 / 0546014044 / 0243563481')+'</div>' +
       '</div>' +
     '</div>' +
 
@@ -539,10 +539,10 @@ function buildInvoiceHTML(inv) {
       '</tbody>' +
     '</table>' +
 
-    '<div style="display:flex;flex-direction:column;align-items:flex-end;border-top:2px solid var(--brand-brown);padding:10px 14px;gap:6px">' +
+    '<div style="display:flex;flex-direction:column;align-items:flex-end;border-top:2px solid var(--accent);padding:10px 14px;gap:6px">' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Subtotal:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.subtotal || inv.total)+'</span></div>' +
       '<div><span style="font-size:13px;color:var(--gray-400)">Discount:</span> <span style="font-family:var(--font-mono)">-'+fmtGHS(inv.discount || 0)+'</span></div>' +
-      '<div><span style="font-size:13px;font-weight:500">Total </span> <span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--brand-brown)">'+fmtGHS(inv.total)+'</span></div>' +
+      '<div><span style="font-size:13px;font-weight:500">Total </span> <span style="font-family:var(--font-mono);font-size:18px;font-weight:700;color:var(--accent)">'+fmtGHS(inv.total)+'</span></div>' +
       (inv.isCashSale && inv.cashTendered != null ? (
         '<div><span style="font-size:13px;color:var(--gray-400)">Cash Tendered:</span> <span style="font-family:var(--font-mono)">'+fmtGHS(inv.cashTendered)+'</span></div>' +
         '<div><span style="font-size:13px;font-weight:500">Change </span> <span style="font-family:var(--font-mono);font-size:16px;font-weight:700;color:var(--brand-green)">'+fmtGHS(Math.max(0, inv.cashTendered - inv.total))+'</span></div>'
@@ -804,7 +804,7 @@ function generateInvoiceText(inv) {
 
   return `
 ${'━'.repeat(58)}
-LUMODA ENTERPRISE
+${getBusinessSettings()?.business_name || 'LUMODA ENTERPRISE'}
 The cook's helper
 Dealers in All Kinds of Kitchen Accessories
 MAA LUCY'S PLACE
@@ -816,7 +816,7 @@ Shop No. OCL/ZR/GF/A20 and A21
 LOCATION 2: Morocco (K.O) OLD Barbers Building
 Shop No. GF 26
 
-TEL: 0244369357 / 0546014044 / 0243563481
+TEL: ${getBusinessSettings()?.phone || '0244369357 / 0546014044 / 0243563481'}
 
 ${'━'.repeat(58)}
 INVOICE
@@ -1166,10 +1166,10 @@ function printInvoice(inv) {
       <table width="100%" cellpadding="0" cellspacing="0" style="background:#5C2D0A;color:white;padding:12px 16px">
         <tr>
           <td>
-            <div style="font-size:20px;font-weight:800;letter-spacing:1px">LUMODA ENTERPRISE</div>
+            <div style="font-size:20px;font-weight:800;letter-spacing:1px">${escapeHtml(getBusinessSettings()?.business_name || 'LUMODA ENTERPRISE')}</div>
             <div style="font-style:italic;font-size:12px;opacity:.9">The cook's helper</div>
             <div style="font-size:10px;opacity:.75">Dealers in All Kinds of Kitchen Accessories</div>
-            <div style="font-size:10px;opacity:.85;margin-top:3px">Tel: 0244369357 / 0546014044 / 0243563481</div>
+            <div style="font-size:10px;opacity:.85;margin-top:3px">Tel: ${escapeHtml(getBusinessSettings()?.phone || '0244369357 / 0546014044 / 0243563481')}</div>
           </td>
           <td align="right">
             <div style="border:1px solid rgba(255,255,255,.45);padding:4px 10px;font-size:11px;font-weight:700">MAA LUCY'S PLACE</div>
