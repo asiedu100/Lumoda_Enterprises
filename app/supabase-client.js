@@ -180,12 +180,7 @@
     return (data || []).map(toLocalCustomer);
   }
 
-  async function loadInvoices() {
-    const sb = getClient();
-    if (!sb) throw new Error('Supabase is not configured.');
-    const { data, error } = await sb
-      .from('invoices')
-      .select(`
+  const INVOICE_SELECT = `
         id, number, customer_name, customer_phone, customer_address,
         location, subtotal, discount, total, status, pay_method, momo_number, notes,
         amount_paid, balance, partial_method, partial_momo_number, is_cash_sale, cash_tendered,
@@ -193,10 +188,10 @@
         creator:profiles!invoices_created_by_fkey (full_name, username),
         invoice_items(*),
         invoice_payments(id, amount, method, momo_number, note, created_by, created_at)
-      `)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return (data || []).map(row => ({
+      `;
+
+  function toLocalInvoice(row) {
+    return {
       id:              row.id,
       number:          row.number,
       customerName:    row.customer_name,
@@ -240,7 +235,33 @@
       deleted:   !!row.deleted,
       deletedAt: row.deleted_at ? new Date(row.deleted_at).getTime() : null,
       deletedBy: row.deleted_by || null
-    }));
+    };
+  }
+
+  async function loadInvoices() {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb
+      .from('invoices')
+      .select(INVOICE_SELECT)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    return (data || []).map(toLocalInvoice);
+  }
+
+  // Fetches exactly one invoice (same shape as loadInvoices) so callers can
+  // patch their local cache after a single write instead of re-downloading
+  // every invoice in the business.
+  async function loadInvoiceById(id) {
+    const sb = getClient();
+    if (!sb) throw new Error('Supabase is not configured.');
+    const { data, error } = await sb
+      .from('invoices')
+      .select(INVOICE_SELECT)
+      .eq('id', id)
+      .maybeSingle();
+    if (error) throw error;
+    return data ? toLocalInvoice(data) : null;
   }
 
   async function loadProfiles() {
@@ -285,7 +306,8 @@
       p_partial_method:   payload.p_partial_method   || null,
       p_partial_momo:     payload.p_partial_momo     || null,
       p_is_cash_sale:     payload.p_is_cash_sale     || false,
-      p_cash_tendered:    payload.p_cash_tendered    != null ? payload.p_cash_tendered : null
+      p_cash_tendered:    payload.p_cash_tendered    != null ? payload.p_cash_tendered : null,
+      p_client_ref:       payload.p_client_ref       || null
     });
   }
 
@@ -839,6 +861,7 @@
     loadProducts,
     loadCustomers,
     loadInvoices,
+    loadInvoiceById,
     loadProfiles,
     recordLogin,
 

@@ -3,7 +3,11 @@
 // ============================================================
 function renderDashboard() {
   updateUserUI();
-  const invoices   = filterByLoc(getInvoices());
+  // Combined with cash sales (walk-in, no named customer) so "Today's
+  // Sales" reflects true revenue — see reports.js for why Top Customers
+  // specifically stays invoices-only elsewhere; the Dashboard has no
+  // customer-identity tile to worry about, so it's safe to blend here.
+  const invoices   = filterByLoc(getInvoices()).concat(filterByLoc(getCashSales()));
   // Sales-total tiles show branch-wide numbers to admins, but only the
   // logged-in staff member's own sales to everyone else — the day's
   // revenue figures are business-sensitive and staff don't need the

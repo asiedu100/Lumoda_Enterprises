@@ -12,7 +12,10 @@ function renderProducts() {
   if (orderBtn) orderBtn.style.display = isAdmin() ? 'inline-flex' : 'none';
   if (linkBtn)  linkBtn.style.display  = isAdmin() ? 'inline-flex' : 'none';
   let products = getProducts();
+  const totalCount = products.length;
   if(productSearch){const q=productSearch.toLowerCase();products=products.filter(p=>p.name.toLowerCase().includes(q)||p.category.toLowerCase().includes(q)||p.sku.toLowerCase().includes(q));}
+  const countEl = document.getElementById('products-count');
+  if (countEl) countEl.textContent = productSearch ? products.length+' of '+totalCount+' products' : totalCount+' product'+(totalCount!==1?'s':'');
   const effLoc=isAdmin()?currentLocation:currentUser.location;
   document.getElementById('products-body').innerHTML = products.map(p=>{
     const sA=p.stockAlabar,sM=p.stockMorocco,comb=effLoc==='Morocco'?sM:effLoc==='Alabar'?sA:Math.min(sA,sM);

@@ -133,6 +133,9 @@
         <div style="font-size:12px;color:var(--white);font-weight:500" id="loc-name">—</div>
       </div>
     </div>
+    <div style="padding:0 20px 12px">
+      <span id="offline-queue-badge" style="display:none" onclick="openOfflineQueueModal()"></span>
+    </div>
     <div class="nav-section">
       <div class="nav-lbl">Overview</div>
       <div class="nav-item active" data-page="dashboard" onclick="navigate('dashboard',this)">
@@ -293,6 +296,7 @@
         <div class="card">
           <div class="card-header">
             <div class="search-wrap"><input type="text" placeholder="Search products…" oninput="filterProducts(this.value)"></div>
+            <div id="products-count" style="font-size:12px;font-weight:700;color:var(--accent);font-family:'DM Mono',monospace"></div>
             <div style="flex:1"></div>
             <button class="btn btn-secondary btn-sm" id="btn-order-stock" onclick="orderStock()" style="display:none">📋 Order Stock</button>
             <button class="btn btn-secondary btn-sm" id="btn-link-warehouse" onclick="openCatalogLinkModal()" style="display:none">🔗 Link to Warehouse Catalog</button>
@@ -610,6 +614,18 @@
 
 
 <!-- View Invoice -->
+<div class="modal-overlay" id="offline-queue-modal">
+  <div class="modal">
+    <div class="modal-header"><div class="modal-title">Offline Sales Queue</div><button class="modal-close" onclick="closeModal('offline-queue-modal')">×</button></div>
+    <div class="modal-body" id="offline-queue-body"></div>
+    <div class="modal-footer">
+      <div class="modal-footer-right">
+        <button class="btn btn-primary" onclick="closeModal('offline-queue-modal')">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="view-invoice-modal">
   <div class="modal">
     <div class="modal-header"><div class="modal-title" id="view-inv-title">Invoice</div><button class="modal-close" onclick="closeModal('view-invoice-modal')">×</button></div>

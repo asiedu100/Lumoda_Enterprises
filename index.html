@@ -3,6 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<!--
+  GOOGLE ANALYTICS — placeholder ID, not live yet.
+  1. Create a free GA4 property at https://analytics.google.com (Admin → Create Property).
+  2. Copy the "Measurement ID" (looks like G-XXXXXXXXXX).
+  3. Replace BOTH occurrences of G-XXXXXXXXXX below with it.
+  That's it — visits, and the WhatsApp/call click events wired up in site.js, will start
+  showing up in GA within a few minutes.
+-->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script>
+
 <title>Lumoda Enterprise — Wholesale &amp; Retail Kitchen Accessories</title>
 <meta name="description" content="Lumoda Enterprise (Maa Lucy's Place) — quality kitchen tools, cookware, glassware, knives &amp; appliances at wholesale prices you can count on. Alabar &amp; Morocco (K.O), Kumasi.">
 <meta property="og:title" content="Lumoda Enterprise">
@@ -10,12 +27,82 @@
 <meta property="og:image" content="https://lumoda.netlify.app/lumo.jpeg">
 <meta property="og:url" content="https://lumoda.netlify.app">
 <meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Lumoda Enterprise">
+<meta name="twitter:description" content="Wholesale &amp; Retail Kitchen Accessories You Can Trust">
+<meta name="twitter:image" content="https://lumoda.netlify.app/lumo.jpeg">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
 <link rel="icon" type="image/jpeg" href="/lumo.jpeg">
 <link rel="apple-touch-icon" href="/lumo.jpeg">
 <meta name="theme-color" content="#5C2D0A">
 <link rel="preload" as="image" href="images/hero-1.jpg" fetchpriority="high">
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Serif:ital@0;1&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="site.css">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": "https://lumoda.netlify.app/#org",
+      "name": "Lumoda Enterprise",
+      "alternateName": "Maa Lucy's Place",
+      "url": "https://lumoda.netlify.app",
+      "logo": "https://lumoda.netlify.app/lumo.jpeg",
+      "telephone": "+233546014044"
+    },
+    {
+      "@type": "Store",
+      "@id": "https://lumoda.netlify.app/#alabar",
+      "name": "Lumoda Enterprise — Alabar",
+      "image": "https://lumoda.netlify.app/lumo.jpeg",
+      "url": "https://lumoda.netlify.app",
+      "telephone": "+233546014044",
+      "priceRange": "GH₵",
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "Areeba Junction, shop number OCL/ZR/GF/A20 and A21",
+        "addressLocality": "Kumasi",
+        "addressCountry": "GH"
+      },
+      "geo": {
+        "@type": "GeoCoordinates",
+        "latitude": 6.6998563,
+        "longitude": -1.614037
+      },
+      "openingHoursSpecification": {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"],
+        "opens": "07:00",
+        "closes": "17:00"
+      },
+      "branchOf": { "@id": "https://lumoda.netlify.app/#org" }
+    },
+    {
+      "@type": "Store",
+      "@id": "https://lumoda.netlify.app/#morocco",
+      "name": "Lumoda Enterprise — Morocco (K.O)",
+      "image": "https://lumoda.netlify.app/lumo.jpeg",
+      "url": "https://lumoda.netlify.app",
+      "telephone": "+233243563481",
+      "priceRange": "GH₵",
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "Old barbers building, GF 26",
+        "addressLocality": "Kumasi",
+        "addressCountry": "GH"
+      },
+      "openingHoursSpecification": {
+        "@type": "OpeningHoursSpecification",
+        "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"],
+        "opens": "07:00",
+        "closes": "17:00"
+      },
+      "branchOf": { "@id": "https://lumoda.netlify.app/#org" }
+    }
+  ]
+}
+</script>
 </head>
 <body>
 
@@ -119,6 +206,18 @@
           <h4>BUILT ON TRUST</h4>
           <p>Strong relationships built on honesty and trust.</p>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="about" id="about">
+    <div class="wrap">
+      <div class="gallery-head reveal">
+        <h2>About Lumoda</h2>
+        <p>Wholesale &amp; retail kitchenware, right here in Kumasi.</p>
+      </div>
+      <div class="about-body reveal">
+        <p>Lumoda Enterprise (Maa Lucy's Place) is a Ghana-based kitchenware business supplying homes, hotels, restaurants and shop owners with quality cookware, glassware, knives, tools and appliances. Whether you're buying one item or stocking up wholesale, our two Kumasi locations — Alabar and Morocco (K.O) — are open Monday to Saturday, 7am to 5pm, ready to help.</p>
       </div>
     </div>
   </section>
@@ -271,6 +370,7 @@
 
       <div class="panel reveal">
         <span class="panel-label">VISIT US AT</span>
+        <p class="contact-note" style="margin:-6px 0 16px;font-size:12.5px;color:var(--gray-600)"><strong style="color:var(--brand-brown)">Open Mon–Sat, 7am–5pm</strong> · Closed Sundays</p>
         <div class="loc-item">
           <span class="loc-pin"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg></span>
           <div>
@@ -310,7 +410,7 @@
     </div>
     <div class="footer-bottom">
       <span>&copy; <span id="year"></span> Lumoda Enterprise — Maa Lucy's Place</span>
-      <a href="/app/">Staff Login →</a>
+      <span><a href="/privacy.html">Privacy Policy</a> &nbsp;·&nbsp; <a href="/app/">Staff Login →</a></span>
     </div>
     <div class="powered" style="text-align:center;margin-top:16px">Powered by MRASYSTEMS</div>
   </div>

@@ -90,7 +90,12 @@ function renderCashSales() {
   if (!tbody) return;
   tbody.innerHTML = sales.length===0
     ? '<tr><td colspan="7" style="text-align:center;color:var(--gray-400);padding:40px">No cash sales yet</td></tr>'
-    : sales.map(i=>'<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+escapeHtml(i.number)+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td><span class="badge badge-neutral">'+escapeHtml(i.location)+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td style="color:var(--gray-400);font-size:12px">'+escapeHtml(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>').join('');
+    : sales.map(i=>{
+        const syncBadge = i.offlineSync==='pending' ? ' <span class="badge badge-warning" style="font-size:9px">⏳ Pending Sync</span>'
+          : i.offlineSync==='failed' ? ' <span class="badge badge-danger" style="font-size:9px" title="Open Offline Sales Queue to review" onclick="event.stopPropagation();openOfflineQueueModal()">⚠ Needs Review</span>'
+          : '';
+        return '<tr><td class="mono" style="cursor:pointer" onclick="viewInvoice(\''+i.id+'\')">'+escapeHtml(i.number)+syncBadge+'</td><td class="mono">'+fmtDate(i.createdAt)+'</td><td><span class="badge badge-neutral">'+escapeHtml(i.location)+'</span></td><td style="color:var(--gray-600)">'+i.items.length+' item'+(i.items.length!==1?'s':'')+'</td><td class="mono" style="font-weight:500">'+fmtGHS(i.total)+'</td><td style="color:var(--gray-400);font-size:12px">'+escapeHtml(i.createdByName || 'Unknown')+'</td><td><button class="btn btn-secondary btn-sm" onclick="viewInvoice(\''+i.id+'\')">View</button></td></tr>';
+      }).join('');
 }
 
 function _walkInName() {
@@ -376,13 +381,14 @@ async function createInvoice() {
   };
 
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    let rpcPayload = null;
     try {
       const cachedProducts = getProducts();
       const p_items = items.map(it => {
         const prod = cachedProducts.find(p => p.name.toLowerCase() === it.name.toLowerCase());
         return { product_id: prod ? prod.id : null, name: it.name, qty: it.qty, price: it.price, sale_type: it.priceType || 'retail' };
       });
-      const res = await window.LumodaSupabase.createInvoiceNoStock({
+      rpcPayload = {
         p_customer_name:    name,
         p_location:         loc,
         p_items:            p_items,
@@ -394,8 +400,10 @@ async function createInvoice() {
         p_notes:            notes    || null,
         p_discount:         discount || 0,
         p_is_cash_sale:     isCashSale,
-        p_cash_tendered:    cashTendered
-      });
+        p_cash_tendered:    cashTendered,
+        p_client_ref:       makeClientRef()
+      };
+      const res = await window.LumodaSupabase.createInvoiceNoStock(rpcPayload);
       if (res.error) throw res.error;
 
       if (res.data && res.data.discount_pending_approval) {
@@ -405,8 +413,12 @@ async function createInvoice() {
         return;
       }
 
-      await syncSupabaseCache();
+      // The write already succeeded on the server at this point — a
+      // failure refreshing the local cache below must not be treated as a
+      // failed create (the catch block below would otherwise queue a
+      // second, redundant offline copy of a sale that's already recorded).
       addAudit(isCashSale ? 'Cash Sale Created' : 'Invoice Created', currentUser.fullName+' created '+number+' for '+name+' — '+fmtGHS(total)+' ['+loc+']');
+      try { await syncSingleInvoice(res.data && res.data.invoice_id); } catch (e) { console.warn('Post-create cache refresh failed (sale still recorded):', e); }
       invoiceSaving = false;
       closeModal('invoice-modal');
       toast(isCashSale ? 'Cash sale '+number+' recorded!' : 'Invoice '+number+' created!');
@@ -423,6 +435,24 @@ async function createInvoice() {
     } catch (err) {
       console.error('Invoice creation error:', err);
       invoiceSaving = false;
+
+      // Cash sales specifically: a connectivity failure (not a rejection
+      // from the server) is queued locally instead of losing the sale.
+      // Regular credit invoices are unaffected — they still need a person
+      // to notice and retry, since "pending" invoices aren't a checkout
+      // moment that has to be resolved right now.
+      if (isCashSale && rpcPayload && isNetworkError(err)) {
+        queueOfflineCashSale(invoice, rpcPayload);
+        closeModal('invoice-modal');
+        toast('No connection — cash sale '+number+' saved and will sync automatically', 'info');
+        currentLocation = 'All';
+        renderDashboard();
+        if (document.getElementById('page-cashsales').classList.contains('active')) renderCashSales();
+        try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
+        printInvoice(invoice);
+        return;
+      }
+
       toast((err.message||'Could not create invoice'), 'error');
       return;
     }
@@ -446,6 +476,212 @@ async function createInvoice() {
   try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
   if (isCashSale) printInvoice(invoice);
 }
+
+// ============================================================
+// OFFLINE CASH SALE QUEUE
+// A cash sale that fails purely because of connectivity (not because the
+// server rejected it) is saved locally and retried automatically once the
+// connection returns, instead of being lost. client_ref (generated below,
+// sent to create_invoice_no_stock) makes a retry idempotent server-side —
+// see the offline_cash_sale_idempotency migration — so a retry can never
+// create a duplicate invoice even if an earlier attempt actually reached
+// the server before the connection dropped.
+// ============================================================
+const OFFLINE_QUEUE_KEY = 'lumoda_offline_sales_queue';
+let syncingOfflineQueue = false;
+
+function makeClientRef() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return 'off_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+}
+
+function isNetworkError(err) {
+  if (!navigator.onLine) return true;
+  if (!err) return false;
+  if (err.name === 'TypeError') return true; // fetch()'s own "couldn't reach the server" error
+  const msg = String(err.message || '').toLowerCase();
+  return msg.includes('fetch') || msg.includes('network') || msg.includes('load failed');
+}
+
+function getOfflineQueue() { return LS.get(OFFLINE_QUEUE_KEY) || []; }
+function setOfflineQueue(q) { LS.set(OFFLINE_QUEUE_KEY, q); renderOfflineQueueBadge(); }
+
+function queueOfflineCashSale(invoice, rpcPayload) {
+  const queue = getOfflineQueue();
+  queue.push({
+    clientRef: rpcPayload.p_client_ref,
+    payload: rpcPayload,
+    invoice,
+    status: 'pending',
+    error: null,
+    queuedAt: Date.now()
+  });
+  setOfflineQueue(queue);
+
+  // Show it in Cash Sales immediately, tagged as unsynced, so the cashier
+  // sees continuity instead of wondering if it actually went through.
+  const invoices = LS.get('lumoda_invoices') || [];
+  invoices.push(Object.assign({}, invoice, { offlineSync: 'pending' }));
+  LS.set('lumoda_invoices', invoices);
+  addAudit('Cash Sale Queued Offline', currentUser.fullName+' recorded '+invoice.number+' for '+invoice.customerName+' — '+fmtGHS(invoice.total)+' [no connection, will sync]');
+}
+
+function removeLocalPlaceholderInvoice(localId) {
+  const invoices = LS.get('lumoda_invoices') || [];
+  const idx = invoices.findIndex(i => i.id === localId);
+  if (idx >= 0) { invoices.splice(idx, 1); LS.set('lumoda_invoices', invoices); }
+}
+
+// Flips the Cash Sales row's badge from "⏳ Pending Sync" to "⚠ Needs Review"
+// once a sync attempt actually fails for a real reason (not connectivity).
+function markPlaceholderNeedsReview(localId) {
+  const invoices = LS.get('lumoda_invoices') || [];
+  const idx = invoices.findIndex(i => i.id === localId);
+  if (idx >= 0) { invoices[idx] = Object.assign({}, invoices[idx], { offlineSync: 'failed' }); LS.set('lumoda_invoices', invoices); }
+}
+
+async function trySyncOfflineQueueItem(item) {
+  try {
+    const res = await window.LumodaSupabase.createInvoiceNoStock(item.payload);
+    if (res.error) throw res.error;
+    if (res.data && res.data.discount_pending_approval) {
+      return { ok: false, needsReview: true, error: 'This sale included a discount that needs admin approval — open it and resubmit as a regular invoice.' };
+    }
+    removeLocalPlaceholderInvoice(item.invoice.id);
+    await syncSingleInvoice(res.data.invoice_id);
+    return { ok: true };
+  } catch (err) {
+    if (isNetworkError(err)) return { ok: false, stillOffline: true };
+    return { ok: false, needsReview: true, error: err.message || 'Could not sync this sale' };
+  }
+}
+
+async function trySyncOfflineQueue() {
+  if (syncingOfflineQueue) return;
+  if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
+  if (!navigator.onLine) return;
+  if (!getOfflineQueue().some(i => i.status === 'pending')) return;
+
+  syncingOfflineQueue = true;
+  try {
+    // Only the client_refs to attempt are snapshotted up front — the queue
+    // itself is re-read fresh immediately before every write below, so a
+    // concurrent discard/retry (e.g. from the Offline Queue modal, which
+    // does its own independent read-modify-write) is never clobbered by a
+    // stale copy of the array held across this loop's awaits.
+    const clientRefsToTry = getOfflineQueue().filter(i => i.status === 'pending').map(i => i.clientRef);
+    let changed = false;
+    for (const clientRef of clientRefsToTry) {
+      const current = getOfflineQueue().find(i => i.clientRef === clientRef);
+      if (!current || current.status !== 'pending') continue; // discarded/changed since the snapshot
+
+      const result = await trySyncOfflineQueueItem(current);
+      const queueNow = getOfflineQueue();
+      const idx = queueNow.findIndex(i => i.clientRef === clientRef);
+      if (idx < 0) continue; // discarded while this attempt was in flight
+
+      if (result.ok) {
+        queueNow.splice(idx, 1);
+        LS.set(OFFLINE_QUEUE_KEY, queueNow);
+        changed = true;
+      } else if (result.needsReview) {
+        queueNow[idx].status = 'failed';
+        queueNow[idx].error = result.error;
+        LS.set(OFFLINE_QUEUE_KEY, queueNow);
+        markPlaceholderNeedsReview(current.invoice.id);
+        changed = true;
+      }
+      // result.stillOffline: leave this one pending and move on to the next
+      // — one item that can't be classified shouldn't block the rest of the
+      // queue from syncing.
+    }
+    if (changed) {
+      renderDashboard();
+      if (document.getElementById('page-cashsales')?.classList.contains('active')) renderCashSales();
+    }
+  } finally {
+    syncingOfflineQueue = false;
+    renderOfflineQueueBadge();
+  }
+}
+
+function renderOfflineQueueBadge() {
+  const el = document.getElementById('offline-queue-badge');
+  if (!el) return;
+  const queue = getOfflineQueue();
+  if (queue.length === 0) { el.style.display = 'none'; return; }
+  const failed = queue.filter(i => i.status === 'failed').length;
+  el.style.display = 'inline-flex';
+  el.className = 'badge ' + (failed ? 'badge-danger' : 'badge-warning');
+  el.style.cursor = 'pointer';
+  el.textContent = failed
+    ? '⚠ '+failed+' sale'+(failed!==1?'s':'')+' need'+(failed===1?'s':'')+' review'
+    : '⏳ '+queue.length+' pending sync';
+}
+
+async function retryOfflineQueueItem(clientRef) {
+  const queue = getOfflineQueue();
+  const item = queue.find(i => i.clientRef === clientRef);
+  if (!item) return;
+  item.status = 'pending';
+  item.error = null;
+  LS.set(OFFLINE_QUEUE_KEY, queue);
+  renderOfflineQueueBadge();
+  await trySyncOfflineQueue();
+  renderOfflineQueueModal();
+}
+
+function discardOfflineQueueItem(clientRef) {
+  // Discarding permanently drops a sale with nothing to show for it on the
+  // server — same accountability bar as deleteInvoice(), which also
+  // requires admin even for its own offline-placeholder branch.
+  if (!requireAdmin('discard queued sales')) return;
+  const queue = getOfflineQueue();
+  const item = queue.find(i => i.clientRef === clientRef);
+  if (!item) return;
+  const msg = item.status === 'failed'
+    ? 'Discard this sale permanently? It was never recorded on the server — only do this if it was a duplicate or mistake.'
+    : 'Discard this sale? It hasn\'t synced to the server yet, so nothing will be deleted there — it will just be removed from this device.';
+  if (!confirm(msg)) return;
+  setOfflineQueue(queue.filter(i => i.clientRef !== clientRef));
+  removeLocalPlaceholderInvoice(item.invoice.id);
+  renderDashboard();
+  if (document.getElementById('page-cashsales')?.classList.contains('active')) renderCashSales();
+  renderOfflineQueueModal();
+}
+
+function openOfflineQueueModal() {
+  renderOfflineQueueModal();
+  openModal('offline-queue-modal');
+}
+
+function renderOfflineQueueModal() {
+  const body = document.getElementById('offline-queue-body');
+  if (!body) return;
+  const queue = getOfflineQueue().slice().sort((a,b)=>b.queuedAt-a.queuedAt);
+  body.innerHTML = queue.length === 0
+    ? '<p style="color:var(--gray-400);text-align:center;padding:20px">Nothing queued — everything is synced.</p>'
+    : queue.map(item => {
+        const inv = item.invoice;
+        const statusHtml = item.status === 'failed'
+          ? '<div style="color:#991b1b;font-size:12px;margin-top:4px">⚠ '+escapeHtml(item.error||'Could not sync')+'</div>'
+          : '<div style="color:var(--gray-400);font-size:12px;margin-top:4px">⏳ Waiting for connection…</div>';
+        const actions =
+          (item.status === 'failed' ? '<button class="btn btn-secondary btn-sm" onclick="retryOfflineQueueItem(\''+item.clientRef+'\')">Retry</button> ' : '')
+          + '<button class="btn btn-secondary btn-sm" onclick="discardOfflineQueueItem(\''+item.clientRef+'\')">Discard</button>';
+        return '<div style="padding:12px 0;border-bottom:1px solid var(--gray-100)">'
+          + '<div style="display:flex;justify-content:space-between;align-items:center">'
+          + '<strong>'+escapeHtml(inv.number)+' — '+escapeHtml(inv.customerName)+'</strong>'
+          + '<span class="mono">'+fmtGHS(inv.total)+'</span>'
+          + '</div>'
+          + statusHtml
+          + '<div style="margin-top:8px">'+actions+'</div>'
+          + '</div>';
+      }).join('');
+}
+
+window.addEventListener('online', () => trySyncOfflineQueue());
+renderOfflineQueueBadge();
 
 function viewInvoice(id) {
   viewingInvoiceId = id;
@@ -567,14 +803,32 @@ function buildInvoiceHTML(inv) {
 
 async function deleteInvoice(id) {
   if (!requireAdmin('delete invoices')) return;
+
+  // A cash sale still waiting to sync (or that failed to sync) was never
+  // actually recorded on the server — there's nothing there to delete, so
+  // this is a pure local discard, not a network call that can only fail.
+  const queueItem = getOfflineQueue().find(i => i.invoice.id === id);
+  if (queueItem) {
+    if (!confirm('This sale hasn\'t synced to the server yet. Discard it? This cannot be undone.')) return;
+    setOfflineQueue(getOfflineQueue().filter(i => i.clientRef !== queueItem.clientRef));
+    removeLocalPlaceholderInvoice(id);
+    addAudit('Offline Sale Discarded', currentUser.fullName+' discarded unsynced sale '+queueItem.invoice.number);
+    closeModal('view-invoice-modal'); toast('Sale discarded.'); renderPage('invoices');
+    return;
+  }
+
   if (!confirm('Soft-delete this invoice? It remains in the audit trail.')) return;
 
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try {
       const res = await window.LumodaSupabase.softDeleteInvoiceNoStock(id);
       if (res.error) throw res.error;
-      await syncSupabaseCache();
+      // The delete itself already succeeded on the server at this point —
+      // a failure refreshing the local cache below is not a delete failure,
+      // and must not be reported or logged as one (the audit trail should
+      // reflect what actually happened, not what we managed to redisplay).
       addAudit('Invoice Deleted', currentUser.fullName+' deleted invoice '+id+' [server]');
+      try { await syncSingleInvoice(id); } catch (e) { console.warn('Post-delete cache refresh failed (delete still succeeded):', e); }
       closeModal('view-invoice-modal'); toast('Invoice deleted.'); renderPage('invoices');
       return;
     } catch (err) {
@@ -952,10 +1206,12 @@ async function updateInvoice(id, updates) {
       const res = await window.LumodaSupabase.updateInvoiceNoStock(id, mergedUpdates);
       if (res.error) throw res.error;
 
-      // FIX #1: Wait for full cache sync BEFORE re-rendering the modal
-      await syncSupabaseCache();
-
+      // The update itself already succeeded on the server at this point —
+      // a failure refreshing the local cache below is not an update
+      // failure, and must not be reported or logged as one.
       addAudit('Invoice Edited', currentUser.fullName+' edited invoice '+id+' [server]');
+      try { await syncSingleInvoice(id); } catch (e) { console.warn('Post-update cache refresh failed (update still succeeded):', e); }
+
       if (res.data && res.data.items_pending_approval) {
         toast('Saved — but removing/reducing an item needs admin approval first, so that part is on hold', 'info');
       } else {

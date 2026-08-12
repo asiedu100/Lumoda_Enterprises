@@ -152,6 +152,36 @@ async function syncSupabaseCache() {
 
   // FIX #2: Refresh product suggestions in any open invoice modal after cache sync
   refreshAllLineItemDataLists();
+
+  // A full sync only succeeds when we actually have a connection — a good
+  // moment to also flush any cash sales queued while offline.
+  if (typeof trySyncOfflineQueue === 'function') trySyncOfflineQueue();
+}
+
+// Lightweight alternative to syncSupabaseCache() for a single invoice write
+// (create/edit/delete). Re-downloads just that one invoice — plus the small,
+// join-free customers table in case the write created a new customer —
+// instead of every invoice, product, and log the business has ever had.
+async function syncSingleInvoice(invoiceId) {
+  if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
+
+  const [invoice, customers] = await Promise.all([
+    window.LumodaSupabase.loadInvoiceById(invoiceId),
+    window.LumodaSupabase.loadCustomers().catch(() => null)
+  ]);
+
+  const invoices = LS.get('lumoda_invoices') || [];
+  const idx = invoices.findIndex(i => i.id === invoiceId);
+  if (invoice) {
+    if (idx >= 0) invoices[idx] = invoice; else invoices.unshift(invoice);
+  } else if (idx >= 0) {
+    invoices.splice(idx, 1);
+  }
+  LS.set('lumoda_invoices', invoices);
+
+  if (Array.isArray(customers)) LS.set('lumoda_customers', customers);
+
+  refreshAllLineItemDataLists();
 }
 
 async function doLogin() {
@@ -289,6 +319,10 @@ function requireAdmin(action) {
 }
 function canEditInvoice(inv) {
   if (!currentUser || !inv || inv.deleted) return false;
+  // Not yet synced to the server (offline queue) — its id is a local
+  // placeholder, not a real invoice id, so there's nothing there yet for
+  // an edit call to actually update. Wait for it to sync first.
+  if (inv.offlineSync) return false;
   if (isAdmin()) return true;
   return inv.location && currentUser.location === inv.location;
 }

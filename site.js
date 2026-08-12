@@ -122,3 +122,28 @@ document.getElementById('year').textContent = new Date().getFullYear();
     if (e.key === 'ArrowRight') show(current.key, current.index + 1);
   });
 })();
+
+// Analytics click tracking — WhatsApp and phone links are the site's real
+// "conversions" (there's no cart/checkout). No-ops safely if GA is blocked
+// or not yet configured (see the placeholder ID note in index.html <head>).
+(function () {
+  if (typeof gtag !== 'function') return;
+
+  document.querySelectorAll('a[href*="wa.me"]').forEach(function (link) {
+    link.addEventListener('click', function () {
+      gtag('event', 'contact_whatsapp', { link_location: link.closest('section,header,footer')?.className || '' });
+    });
+  });
+
+  document.querySelectorAll('a[href^="tel:"]').forEach(function (link) {
+    link.addEventListener('click', function () {
+      gtag('event', 'contact_phone', { phone_number: link.getAttribute('href').replace('tel:', '') });
+    });
+  });
+
+  document.querySelectorAll('a[href="/app/"]').forEach(function (link) {
+    link.addEventListener('click', function () {
+      gtag('event', 'staff_login_click');
+    });
+  });
+})();
