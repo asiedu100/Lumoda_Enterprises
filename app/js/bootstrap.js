@@ -42,8 +42,10 @@ initData();
       if (user && window.LumodaSupabase.getProfile) {
         const { data: profile } = await window.LumodaSupabase.getProfile(user.id);
         if (profile && profile.active !== false) {
+          clearUserScopedState();
           currentUser = supabaseProfileToLocal(profile);
           currentLocation = currentUser.location || 'All';
+          authGeneration++;
           currentUser.token = registerSession(currentUser);
           await syncSupabaseCache();
           if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }

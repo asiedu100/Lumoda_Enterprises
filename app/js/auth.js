@@ -73,6 +73,8 @@ async function forceLogout(reason) {
   destroySession();
   stopActivityTracking();
   currentUser = null;
+  authGeneration++;
+  clearUserScopedState();
   showAuthScreen();
   toast('You were logged out due to inactivity.', 'error');
 }
@@ -122,6 +124,12 @@ async function resolveSupabaseLoginEmail(identifier) {
 async function syncSupabaseCache() {
   if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
 
+  // Captured before the fetch, checked again before writing anything below
+  // — if a different user has since logged in or out, this response is for
+  // whoever was signed in when it was requested, not whoever is signed in
+  // now, and must not overwrite their fresh data.
+  const myGeneration = authGeneration;
+
   const [products, customers, invoices, stockHistory, auditLogs, businessSettings] = await Promise.all([
     window.LumodaSupabase.loadProducts(),
     window.LumodaSupabase.loadCustomers().catch(() => []),
@@ -131,6 +139,8 @@ async function syncSupabaseCache() {
     window.LumodaSupabase.loadAuditLogs().catch(() => null),
     window.LumodaSupabase.loadBusinessSettings().catch(() => null)
   ]);
+
+  if (myGeneration !== authGeneration) return;
 
   LS.set('lumoda_products', normalizeProducts(products));
   LS.set('lumoda_customers', customers);
@@ -165,10 +175,14 @@ async function syncSupabaseCache() {
 async function syncSingleInvoice(invoiceId) {
   if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
 
+  const myGeneration = authGeneration;
+
   const [invoice, customers] = await Promise.all([
     window.LumodaSupabase.loadInvoiceById(invoiceId),
     window.LumodaSupabase.loadCustomers().catch(() => null)
   ]);
+
+  if (myGeneration !== authGeneration) return;
 
   const invoices = LS.get('lumoda_invoices') || [];
   const idx = invoices.findIndex(i => i.id === invoiceId);
@@ -204,8 +218,13 @@ async function doLogin() {
       if (profileError) throw profileError;
       if (!profile || profile.active === false) throw new Error('Account deactivated or profile missing. Contact your administrator.');
 
+      // Wipe any state left behind by whoever was signed in on this device
+      // before — including their cached data — before this user's identity
+      // is established, so nothing from the previous session can bleed in.
+      clearUserScopedState();
       currentUser = supabaseProfileToLocal(profile);
       currentLocation = currentUser.location;
+      authGeneration++;
       currentUser.token = registerSession(currentUser);
       setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
       try { await window.LumodaSupabase.recordLogin(); } catch (e) { console.warn('Could not record last login:', e); }
@@ -274,7 +293,10 @@ async function doLogout() {
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try { await window.LumodaSupabase.signOut(); } catch (e) {}
   }
-  destroySession(); stopActivityTracking(); currentUser = null; showAuthScreen();
+  destroySession(); stopActivityTracking(); currentUser = null;
+  authGeneration++;
+  clearUserScopedState();
+  showAuthScreen();
 }
 
 function showAuthScreen(clear = true) {

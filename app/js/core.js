@@ -24,6 +24,13 @@ let viewingInvoiceId  = null;
 let lineItemCount     = 0;
 let invoiceSaving     = false;
 let editInvoiceSaving = false;
+// Bumped every time the authenticated user changes (login, logout, or
+// session restore). Any in-flight fetch that writes fetched data back to
+// localStorage (syncSupabaseCache, syncSingleInvoice) captures this value
+// when it starts and re-checks it right before writing — if it no longer
+// matches, a different user is active now and the response is stale, so
+// it's discarded instead of silently overwriting that user's fresh data.
+let authGeneration = 0;
 // Single source of truth for branch names. Dropdowns/filter tabs are
 // re-rendered from this list (see renderLocationSelects()) instead of each
 // hardcoding its own <option> set, so adding a branch here is one line —
@@ -120,6 +127,44 @@ function initData() {
   if (!LS.get('lumoda_invoice_seq'))   LS.set('lumoda_invoice_seq', 2388);
   if (!LS.get('lumoda_sessions'))      LS.set('lumoda_sessions', []);
   ensureUsers();
+}
+
+// Resets everything that could otherwise leak between two different users
+// signed into the same browser: cached business data pulled while the
+// previous user was signed in, in-progress search/filter/sort state, and
+// which record a modal was pointed at. Called on every login, logout, and
+// session restore (see authGeneration above for the matching guard against
+// a slow, still-in-flight response silently undoing this afterward).
+//
+// Deliberately left alone: lumoda_business_settings (branding/currency —
+// genuinely business-wide, not per-user) and the offline sales queue
+// (queued sales must survive a user switch on this device so they still
+// sync once back online).
+function clearUserScopedState() {
+  LS.del('lumoda_invoices');
+  LS.del('lumoda_products');
+  LS.del('lumoda_customers');
+  LS.del('lumoda_stockhistory');
+  LS.del('lumoda_audit');
+
+  currentLocation      = 'All';
+  editingProductId     = null;
+  viewingInvoiceId     = null;
+  productSearch        = '';
+  customerSearchFilter = '';
+  cashSalesFilter      = '';
+  invoiceFilter        = { text: '', status: '' };
+  editingInvoiceId     = null;
+  balanceSearch        = '';
+  warehouseMovementFilter = { search: '', type: 'all', status: 'all' };
+  editingWarehouseId    = null;
+  editingSupplierId     = null;
+  warehouseTransferItems = [];
+  topCustomersSortMode  = 'spend';
+  reportsInvoicesCache  = [];
+  reportsSalesCache     = [];
+  catalogLinkCandidates = [];
+  catalogLinkRemainingCount = 0;
 }
 
 function getUsers()        { return LS.get('lumoda_users') || []; }
