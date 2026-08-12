@@ -18,10 +18,10 @@ document.getElementById('global-search')?.addEventListener('input', e => globalS
 initData();
 
 // ============================================================
-// FIX #4: SINGLE SESSION RESTORE (duplicate removed)
-// Only the safe version remains — no race condition
+// SESSION RESTORE (network failure vs. auth failure — see auth.js for
+// isAuthNetworkFailure/tryEnterOfflineSession/OFFLINE_AUTH_WINDOW_MS)
 // ============================================================
-(async function restoreSession() {
+async function restoreSession() {
   try {
     const sbEnabled =
       window.LumodaSupabase &&
@@ -32,12 +32,21 @@ initData();
       const sb = window.LumodaSupabase.getClient?.();
       if (!sb) throw new Error('Supabase client missing');
 
-      // FIX: Always try to restore from Supabase active session on refresh.
+      // Always try to restore from Supabase's active session on refresh.
       // Supabase persists the session in localStorage automatically.
       // The "remember me" checkbox only controls our own auto-login flag —
-      // but the Supabase token is always available after login until signOut.
-      const { data } = await sb.auth.getUser();
-      const user = data?.user;
+      // but the Supabase token is always available after login until
+      // signOut(). getUser() always revalidates with the server, so its
+      // failure needs to be classified: unreachable server falls back to
+      // the cached session (below); a genuine rejection does not.
+      let user = null, authError = null;
+      try {
+        const { data, error } = await sb.auth.getUser();
+        user = data?.user || null;
+        authError = error || null;
+      } catch (e) {
+        authError = e;
+      }
 
       if (user && window.LumodaSupabase.getProfile) {
         const { data: profile } = await window.LumodaSupabase.getProfile(user.id);
@@ -45,19 +54,32 @@ initData();
           clearUserScopedState();
           currentUser = supabaseProfileToLocal(profile);
           currentLocation = currentUser.location || 'All';
+          isOfflineSession = false;
+          updateOfflineSessionBanner();
+          recordSuccessfulVerification(profile);
           authGeneration++;
           currentUser.token = registerSession(currentUser);
           await syncSupabaseCache();
           if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }
           return;
         }
+        // Profile exists but inactive, or missing — server-confirmed, not
+        // a network issue, so this falls through to the login screen.
+      } else if (authError && typeof isAuthNetworkFailure === 'function' && isAuthNetworkFailure(authError)) {
+        if (tryEnterOfflineSession()) return;
       }
     }
   } catch (e) {
     console.warn('Session restore failed:', e);
   }
   showAuthScreen();
-})();
+}
+restoreSession();
+
+// Revalidate + refresh the token the moment connectivity returns, before
+// the existing offline-queue drain (registered separately, in
+// invoices.js) gets a chance to run against a still-stale token.
+window.addEventListener('online', () => { if (typeof revalidateSessionOnReconnect === 'function') revalidateSessionOnReconnect(); });
 
 // ============================================================
 // SERVICE WORKER (PWA)

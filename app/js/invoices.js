@@ -552,6 +552,12 @@ async function trySyncOfflineQueueItem(item) {
     return { ok: true };
   } catch (err) {
     if (isNetworkError(err)) return { ok: false, stillOffline: true };
+    // A stale/expired access token reaches the server fine (not a network
+    // failure) but gets rejected — safe to retry once the token refreshes,
+    // NOT a permanent rejection of the sale itself. isAuthTokenStaleError
+    // (auth.js) explicitly excludes the disabled-account message, so a
+    // revoked user's queued sale still routes to needsReview below, not here.
+    if (typeof isAuthTokenStaleError === 'function' && isAuthTokenStaleError(err)) return { ok: false, staleAuth: true };
     return { ok: false, needsReview: true, error: err.message || 'Could not sync this sale' };
   }
 }
@@ -590,6 +596,25 @@ async function trySyncOfflineQueue() {
         LS.set(OFFLINE_QUEUE_KEY, queueNow);
         markPlaceholderNeedsReview(current.invoice.id);
         changed = true;
+      } else if (result.staleAuth) {
+        // Every occurrence of this error means the server WAS reached, so
+        // this is genuine elapsed retry time, not time spent offline. Left
+        // pending indefinitely, this would be indistinguishable from an
+        // item that's simply waiting for signal — so it's bounded: once a
+        // single item has been failing on auth grounds for longer than
+        // STALE_TOKEN_RETRY_LIMIT_MS, something is permanently wrong (a
+        // refresh token that's outlived its own lifetime, most likely) and
+        // it's escalated to needsReview instead of retried forever.
+        const firstFailure = queueNow[idx].firstAuthFailureAt || Date.now();
+        if (Date.now() - firstFailure > STALE_TOKEN_RETRY_LIMIT_MS) {
+          queueNow[idx].status = 'failed';
+          queueNow[idx].error = 'Could not verify your session for over 24 hours while online — this needs a manual review rather than continuing to retry automatically.';
+          markPlaceholderNeedsReview(current.invoice.id);
+        } else {
+          queueNow[idx].firstAuthFailureAt = firstFailure;
+        }
+        LS.set(OFFLINE_QUEUE_KEY, queueNow);
+        changed = true;
       }
       // result.stillOffline: leave this one pending and move on to the next
       // — one item that can't be classified shouldn't block the rest of the
@@ -625,6 +650,7 @@ async function retryOfflineQueueItem(clientRef) {
   if (!item) return;
   item.status = 'pending';
   item.error = null;
+  item.firstAuthFailureAt = null; // a manual retry gets a fresh retry window, not the old clock
   LS.set(OFFLINE_QUEUE_KEY, queue);
   renderOfflineQueueBadge();
   await trySyncOfflineQueue();

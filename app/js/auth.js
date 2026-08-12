@@ -198,6 +198,154 @@ async function syncSingleInvoice(invoiceId) {
   refreshAllLineItemDataLists();
 }
 
+// ============================================================
+// NETWORK VS AUTH FAILURE (session restore / offline / reconnect)
+// ============================================================
+
+// True when a Supabase Auth call failed because the server couldn't be
+// reached — as opposed to being reached and rejecting the request. Checked
+// empirically against the live client: a genuine network failure surfaces
+// as error.name === 'AuthRetryableFetchError' with no real HTTP status.
+function isAuthNetworkFailure(err) {
+  if (!navigator.onLine) return true;
+  if (!err) return false;
+  if (err.name === 'AuthRetryableFetchError') return true;
+  if (err.status === 0) return true;
+  const msg = String(err.message || '').toLowerCase();
+  return msg.includes('failed to fetch') || msg.includes('network') || msg.includes('load failed');
+}
+
+// Distinguishes "session temporarily can't be verified" (safe to retry
+// once reconnected/refreshed) from "permanently not authorized" (must
+// flag for admin, never silently retried). Confirmed directly against the
+// live database: a stale/expired token that reaches the server (server
+// IS reachable) makes create_invoice_no_stock raise {code:'P0001',
+// message:'Not authenticated'}. A genuinely disabled account raises a
+// different message, 'Active profile not found' — excluded explicitly
+// below rather than relying only on the two strings not overlapping.
+function isAuthTokenStaleError(err) {
+  if (!err) return false;
+  const msg = String(err.message || '').toLowerCase();
+  if (msg.includes('active profile not found')) return false; // permanent — never treat as "just stale"
+  const code = err.code || '';
+  return msg.includes('not authenticated') || code === 'PGRST301' || msg.includes('jwt expired') || msg.includes('invalid jwt');
+}
+
+// Called after every successful server-verified login/restore/reconnect —
+// the timestamp gates how long a cached session stays trusted offline
+// (OFFLINE_AUTH_WINDOW_MS), and the cached profile is what offline restore
+// reconstructs currentUser from without needing a network call.
+function recordSuccessfulVerification(profile) {
+  LS.set('lumoda_last_verified', Date.now());
+  LS.set('lumoda_cached_profile', {
+    id: profile.id, email: profile.email, username: profile.username,
+    full_name: profile.full_name, role: profile.role, location: profile.location,
+    active: profile.active, must_change_password: profile.must_change_password,
+    default_landing_page: profile.default_landing_page
+  });
+}
+
+// Called from restoreSession() when the server can't be reached at
+// startup. Falls back to the last known-good session, gated by
+// OFFLINE_AUTH_WINDOW_MS so a cached login can't be trusted forever.
+// Deliberately does NOT call clearUserScopedState() — this is the same
+// user continuing, not a different one logging in, and the cached
+// invoices/products/etc. already in localStorage are exactly what's
+// needed to browse offline.
+// Returns true if it handled the situation (entered offline mode, or
+// showed the reconnect-required screen) — false if there's nothing
+// usable/consistent locally, so the caller should fall through to the
+// normal login screen.
+function tryEnterOfflineSession() {
+  const lastVerified  = LS.get('lumoda_last_verified');
+  const cachedProfile = LS.get('lumoda_cached_profile');
+  const rawSession     = window.LumodaSupabase.getRawStoredSession ? window.LumodaSupabase.getRawStoredSession() : null;
+  const sessionUserId  = rawSession?.user?.id;
+
+  if (!lastVerified || !cachedProfile || !sessionUserId || cachedProfile.id !== sessionUserId) {
+    return false; // nothing usable, or the cached profile doesn't match the stored session
+  }
+  if (cachedProfile.active === false) return false; // last known state was already inactive
+
+  if (Date.now() - lastVerified > OFFLINE_AUTH_WINDOW_MS) {
+    const note = document.getElementById('reconnect-pending-note');
+    if (note) note.style.display = (typeof getOfflineQueue === 'function' && getOfflineQueue().length > 0) ? 'block' : 'none';
+    document.getElementById('app').style.display = 'none';
+    document.getElementById('change-pw-screen').style.display = 'none';
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('reconnect-screen').style.display = 'flex';
+    return true;
+  }
+
+  currentUser = supabaseProfileToLocal(cachedProfile);
+  currentLocation = currentUser.location || 'All';
+  isOfflineSession = true;
+  updateOfflineSessionBanner();
+  authGeneration++;
+  currentUser.token = registerSession(currentUser);
+  if (currentUser.mustChangePassword) { showChangePwScreen(); } else { showApp(); }
+  return true;
+}
+
+// Signs the user out because the server says so (disabled account, or a
+// revoked/invalid session discovered on reconnect) — as opposed to the
+// user choosing to log out. No confirm() dialog, since this isn't a
+// choice; server-side authorization wins regardless of what the device
+// was doing offline.
+async function signOutDueToDeactivation() {
+  if (currentUser) addAudit('Account Deactivated', `"${currentUser.fullName}" was signed out — account no longer active`);
+  if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
+    try { await window.LumodaSupabase.signOut(); } catch (e) {}
+    if (window.LumodaSupabase.clearRawStoredSession) window.LumodaSupabase.clearRawStoredSession();
+  }
+  LS.del('lumoda_last_verified');
+  LS.del('lumoda_cached_profile');
+  destroySession(); stopActivityTracking(); currentUser = null;
+  isOfflineSession = false;
+  updateOfflineSessionBanner();
+  authGeneration++;
+  clearUserScopedState();
+  showAuthScreen();
+  toast('Your account is no longer active. Contact your administrator.', 'error');
+}
+
+// Runs when connectivity returns while the app is in offline-session mode
+// — revalidates with the server and refreshes the access token (getUser()
+// triggers this) BEFORE the existing offline-queue drain runs, so a
+// queued sale is retried against a fresh token rather than the stale
+// cached one. A no-op if the session is already fully verified.
+async function revalidateSessionOnReconnect() {
+  if (!isOfflineSession) return;
+  if (!window.LumodaSupabase || !window.LumodaSupabase.isConfigured()) return;
+  const sb = window.LumodaSupabase.getClient?.();
+  if (!sb) return;
+
+  try {
+    const { data, error } = await sb.auth.getUser();
+    if (error) throw error;
+    const user = data?.user;
+    if (!user) throw new Error('No user in restored session');
+
+    const { data: profile, error: profileError } = await window.LumodaSupabase.getProfile(user.id);
+    if (profileError) throw profileError;
+    if (!profile || profile.active === false) {
+      await signOutDueToDeactivation();
+      return;
+    }
+
+    currentUser = supabaseProfileToLocal(profile);
+    recordSuccessfulVerification(profile);
+    isOfflineSession = false;
+    updateOfflineSessionBanner();
+    await syncSupabaseCache(); // resyncs data, and (at its end) drains the offline sales queue
+  } catch (e) {
+    // Still not really reachable, or a transient blip — stay in offline
+    // mode and try again on the next 'online' event rather than signing
+    // anyone out over a network hiccup.
+    if (!isAuthNetworkFailure(e)) console.warn('Reconnect revalidation failed:', e);
+  }
+}
+
 async function doLogin() {
   const username = document.getElementById('auth-user').value.trim().toLowerCase();
   const password = document.getElementById('auth-pass').value;
@@ -224,6 +372,9 @@ async function doLogin() {
       clearUserScopedState();
       currentUser = supabaseProfileToLocal(profile);
       currentLocation = currentUser.location;
+      isOfflineSession = false;
+      updateOfflineSessionBanner();
+      recordSuccessfulVerification(profile);
       authGeneration++;
       currentUser.token = registerSession(currentUser);
       setAutoLoginAllowed(!!document.getElementById('remember-login')?.checked);
@@ -292,8 +443,18 @@ async function doLogout() {
   addAudit('Logout', `"${currentUser.fullName}" signed out`);
   if (window.LumodaSupabase && window.LumodaSupabase.isConfigured()) {
     try { await window.LumodaSupabase.signOut(); } catch (e) {}
+    // signOut()'s own network call is what normally clears the persisted
+    // session — if that call fails (e.g. logging out while offline), the
+    // token would otherwise survive and could be picked back up by the
+    // offline-restore path. Clear it directly so a deliberate logout can
+    // never be restored from, online or not.
+    if (window.LumodaSupabase.clearRawStoredSession) window.LumodaSupabase.clearRawStoredSession();
   }
+  LS.del('lumoda_last_verified');
+  LS.del('lumoda_cached_profile');
   destroySession(); stopActivityTracking(); currentUser = null;
+  isOfflineSession = false;
+  updateOfflineSessionBanner();
   authGeneration++;
   clearUserScopedState();
   showAuthScreen();

@@ -2,6 +2,7 @@
 (function () {
   const cfg = window.LUMODA_SUPABASE || {};
   let client = null;
+  const AUTH_STORAGE_KEY = 'lumoda-auth-token';
 
   function isConfigured() {
     return Boolean(cfg.url && cfg.anonKey && !cfg.url.includes('YOUR_PROJECT_REF'));
@@ -19,7 +20,12 @@
           persistSession: true,
           autoRefreshToken: true,
           detectSessionInUrl: true,
-          storage: window.localStorage
+          storage: window.localStorage,
+          // Explicit rather than supabase-js's undocumented default-derived
+          // key, so the app can reliably read the raw persisted session
+          // itself (see restoreSession()'s offline fallback) without
+          // depending on internal library behavior that isn't guaranteed.
+          storageKey: AUTH_STORAGE_KEY
         }
       });
     }
@@ -38,6 +44,27 @@
     const sb = getClient();
     if (!sb) return;
     return sb.auth.signOut();
+  }
+
+  // Reads the persisted session directly from localStorage, with no network
+  // call and no attempt to refresh an expired token — unlike getSession(),
+  // which internally tries to refresh once the access token has expired and
+  // returns null if that refresh fails (e.g. offline). This is what backs
+  // the offline session-restore fallback.
+  function getRawStoredSession() {
+    try {
+      const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Removes the persisted session directly, independent of whether
+  // signOut()'s own network call succeeds — so logging out while offline
+  // still leaves nothing behind for a later offline-restore to pick up.
+  function clearRawStoredSession() {
+    try { window.localStorage.removeItem(AUTH_STORAGE_KEY); } catch (e) {}
   }
 
   async function getSession() {
@@ -847,6 +874,8 @@
     isConfigured,
 
     getSession,
+    getRawStoredSession,
+    clearRawStoredSession,
     getProfile,
     getProfileByUsername,
     loadBusinessSettings,

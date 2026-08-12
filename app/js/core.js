@@ -15,6 +15,16 @@ const WARNING_MS         = 60 * 1000;
 const MAX_FAILED_LOGINS  = 5;
 const LOCKOUT_MS         = 15 * 60 * 1000;
 const TEMP_PW_EXPIRY_MS  = 24 * 60 * 60 * 1000;
+// How long a cached session stays trusted for offline startup after its
+// last successful online verification, before requiring a fresh connection.
+const OFFLINE_AUTH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// How long a queued sale may keep failing specifically on stale-auth
+// grounds (server reachable, session just not valid — see
+// isAuthTokenStaleError) before it's escalated to needsReview instead of
+// being retried forever. Every occurrence of this failure implies the
+// device was online at that moment, so this is real elapsed retry time,
+// not time spent offline.
+const STALE_TOKEN_RETRY_LIMIT_MS = 24 * 60 * 60 * 1000;
 
 // ---- STATE ----
 let currentUser       = null;
@@ -24,6 +34,11 @@ let viewingInvoiceId  = null;
 let lineItemCount     = 0;
 let invoiceSaving     = false;
 let editInvoiceSaving = false;
+// True when the current session was restored from a cached, not-yet-
+// reverified login (device was offline at startup) rather than a fresh
+// server-confirmed one. Drives the offline-session banner; cleared once
+// reconnect revalidation succeeds.
+let isOfflineSession  = false;
 // Bumped every time the authenticated user changes (login, logout, or
 // session restore). Any in-flight fetch that writes fetched data back to
 // localStorage (syncSupabaseCache, syncSingleInvoice) captures this value
@@ -31,6 +46,14 @@ let editInvoiceSaving = false;
 // matches, a different user is active now and the response is stale, so
 // it's discarded instead of silently overwriting that user's fresh data.
 let authGeneration = 0;
+
+// Shows/hides the "working offline on a saved login" banner to match
+// isOfflineSession — called wherever that flag changes.
+function updateOfflineSessionBanner() {
+  const el = document.getElementById('offline-session-banner');
+  if (el) el.style.display = isOfflineSession ? 'block' : 'none';
+}
+
 // Single source of truth for branch names. Dropdowns/filter tabs are
 // re-rendered from this list (see renderLocationSelects()) instead of each
 // hardcoding its own <option> set, so adding a branch here is one line —
