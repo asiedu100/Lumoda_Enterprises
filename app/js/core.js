@@ -21,10 +21,33 @@ const OFFLINE_AUTH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 // How long a queued sale may keep failing specifically on stale-auth
 // grounds (server reachable, session just not valid — see
 // isAuthTokenStaleError) before it's escalated to needsReview instead of
-// being retried forever. Every occurrence of this failure implies the
-// device was online at that moment, so this is real elapsed retry time,
-// not time spent offline.
+// being retried forever. Measured in CONNECTED time (getCumulativeOnlineMs
+// below), not wall-clock time — a device genuinely offline over a long
+// weekend must not escalate a perfectly good queued sale just because
+// wall-clock hours passed; only time actually spent online while the
+// retry kept failing counts.
 const STALE_TOKEN_RETRY_LIMIT_MS = 24 * 60 * 60 * 1000;
+
+// ---- CUMULATIVE ONLINE TIME ----
+// Tracks total time this device has spent online, persisted so it
+// survives reloads. This is what STALE_TOKEN_RETRY_LIMIT_MS is measured
+// against — see markOnlineTransition (wired in bootstrap.js) for how it
+// accrues only while navigator.onLine is actually true.
+let onlineSinceMark = navigator.onLine ? Date.now() : null;
+
+function getCumulativeOnlineMs() {
+  const base = LS.get('lumoda_cumulative_online_ms') || 0;
+  return (navigator.onLine && onlineSinceMark) ? base + (Date.now() - onlineSinceMark) : base;
+}
+
+function markOnlineTransition(isOnline) {
+  if (isOnline) {
+    onlineSinceMark = Date.now();
+  } else if (onlineSinceMark) {
+    LS.set('lumoda_cumulative_online_ms', (LS.get('lumoda_cumulative_online_ms') || 0) + (Date.now() - onlineSinceMark));
+    onlineSinceMark = null;
+  }
+}
 
 // ---- STATE ----
 let currentUser       = null;

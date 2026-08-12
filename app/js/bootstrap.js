@@ -5,6 +5,13 @@ window.addEventListener('offline',()=>{ const el=document.getElementById('offlin
 window.addEventListener('online', ()=>{ const el=document.getElementById('offline-badge'); if(el) el.style.display='none'; });
 if (!navigator.onLine) { const el=document.getElementById('offline-badge'); if(el) el.style.display='block'; }
 
+// Feeds the cumulative-online-time tracker (core.js) that
+// STALE_TOKEN_RETRY_LIMIT_MS is measured against — kept separate from the
+// badge listeners above since this accrues state, not just toggles a UI
+// element.
+window.addEventListener('online',  () => markOnlineTransition(true));
+window.addEventListener('offline', () => markOnlineTransition(false));
+
 // ============================================================
 // GLOBAL SEARCH
 // ============================================================
