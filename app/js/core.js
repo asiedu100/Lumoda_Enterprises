@@ -15,6 +15,39 @@ const WARNING_MS         = 60 * 1000;
 const MAX_FAILED_LOGINS  = 5;
 const LOCKOUT_MS         = 15 * 60 * 1000;
 const TEMP_PW_EXPIRY_MS  = 24 * 60 * 60 * 1000;
+// How long a cached session stays trusted for offline startup after its
+// last successful online verification, before requiring a fresh connection.
+const OFFLINE_AUTH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+// How long a queued sale may keep failing specifically on stale-auth
+// grounds (server reachable, session just not valid — see
+// isAuthTokenStaleError) before it's escalated to needsReview instead of
+// being retried forever. Measured in CONNECTED time (getCumulativeOnlineMs
+// below), not wall-clock time — a device genuinely offline over a long
+// weekend must not escalate a perfectly good queued sale just because
+// wall-clock hours passed; only time actually spent online while the
+// retry kept failing counts.
+const STALE_TOKEN_RETRY_LIMIT_MS = 24 * 60 * 60 * 1000;
+
+// ---- CUMULATIVE ONLINE TIME ----
+// Tracks total time this device has spent online, persisted so it
+// survives reloads. This is what STALE_TOKEN_RETRY_LIMIT_MS is measured
+// against — see markOnlineTransition (wired in bootstrap.js) for how it
+// accrues only while navigator.onLine is actually true.
+let onlineSinceMark = navigator.onLine ? Date.now() : null;
+
+function getCumulativeOnlineMs() {
+  const base = LS.get('lumoda_cumulative_online_ms') || 0;
+  return (navigator.onLine && onlineSinceMark) ? base + (Date.now() - onlineSinceMark) : base;
+}
+
+function markOnlineTransition(isOnline) {
+  if (isOnline) {
+    onlineSinceMark = Date.now();
+  } else if (onlineSinceMark) {
+    LS.set('lumoda_cumulative_online_ms', (LS.get('lumoda_cumulative_online_ms') || 0) + (Date.now() - onlineSinceMark));
+    onlineSinceMark = null;
+  }
+}
 
 // ---- STATE ----
 let currentUser       = null;
@@ -24,6 +57,26 @@ let viewingInvoiceId  = null;
 let lineItemCount     = 0;
 let invoiceSaving     = false;
 let editInvoiceSaving = false;
+// True when the current session was restored from a cached, not-yet-
+// reverified login (device was offline at startup) rather than a fresh
+// server-confirmed one. Drives the offline-session banner; cleared once
+// reconnect revalidation succeeds.
+let isOfflineSession  = false;
+// Bumped every time the authenticated user changes (login, logout, or
+// session restore). Any in-flight fetch that writes fetched data back to
+// localStorage (syncSupabaseCache, syncSingleInvoice) captures this value
+// when it starts and re-checks it right before writing — if it no longer
+// matches, a different user is active now and the response is stale, so
+// it's discarded instead of silently overwriting that user's fresh data.
+let authGeneration = 0;
+
+// Shows/hides the "working offline on a saved login" banner to match
+// isOfflineSession — called wherever that flag changes.
+function updateOfflineSessionBanner() {
+  const el = document.getElementById('offline-session-banner');
+  if (el) el.style.display = isOfflineSession ? 'block' : 'none';
+}
+
 // Single source of truth for branch names. Dropdowns/filter tabs are
 // re-rendered from this list (see renderLocationSelects()) instead of each
 // hardcoding its own <option> set, so adding a branch here is one line —
@@ -120,6 +173,44 @@ function initData() {
   if (!LS.get('lumoda_invoice_seq'))   LS.set('lumoda_invoice_seq', 2388);
   if (!LS.get('lumoda_sessions'))      LS.set('lumoda_sessions', []);
   ensureUsers();
+}
+
+// Resets everything that could otherwise leak between two different users
+// signed into the same browser: cached business data pulled while the
+// previous user was signed in, in-progress search/filter/sort state, and
+// which record a modal was pointed at. Called on every login, logout, and
+// session restore (see authGeneration above for the matching guard against
+// a slow, still-in-flight response silently undoing this afterward).
+//
+// Deliberately left alone: lumoda_business_settings (branding/currency —
+// genuinely business-wide, not per-user) and the offline sales queue
+// (queued sales must survive a user switch on this device so they still
+// sync once back online).
+function clearUserScopedState() {
+  LS.del('lumoda_invoices');
+  LS.del('lumoda_products');
+  LS.del('lumoda_customers');
+  LS.del('lumoda_stockhistory');
+  LS.del('lumoda_audit');
+
+  currentLocation      = 'All';
+  editingProductId     = null;
+  viewingInvoiceId     = null;
+  productSearch        = '';
+  customerSearchFilter = '';
+  cashSalesFilter      = '';
+  invoiceFilter        = { text: '', status: '' };
+  editingInvoiceId     = null;
+  balanceSearch        = '';
+  warehouseMovementFilter = { search: '', type: 'all', status: 'all' };
+  editingWarehouseId    = null;
+  editingSupplierId     = null;
+  warehouseTransferItems = [];
+  topCustomersSortMode  = 'spend';
+  reportsInvoicesCache  = [];
+  reportsSalesCache     = [];
+  catalogLinkCandidates = [];
+  catalogLinkRemainingCount = 0;
 }
 
 function getUsers()        { return LS.get('lumoda_users') || []; }

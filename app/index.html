@@ -20,6 +20,13 @@
 <body>
 
 <div class="offline-badge" id="offline-badge">● Offline</div>
+<!-- Distinct from offline-badge above: that one reflects live browser
+     connectivity (navigator.onLine) at any moment, even for a fully
+     verified session. This one specifically means "you're using a saved
+     login that hasn't been reverified with the server yet" — a session-
+     trust state, not a connectivity blip — so the app never looks
+     identical online vs. running on a cached, unverified session. -->
+<div id="offline-session-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:600;background:#92400e;color:#fff;text-align:center;font-size:12.5px;font-family:'DM Mono',monospace;padding:7px 12px">⚠ Working offline on a saved login — some actions are unavailable until you're back online</div>
 <div class="toast" id="toast"></div>
 <div id="print-area"></div>
 
@@ -77,6 +84,24 @@
 ">
   Powered by MRASYSTEMS
 </div>
+  </div>
+</div>
+
+<!-- RECONNECT REQUIRED (cached session too old to trust offline) -->
+<div id="reconnect-screen" class="full-screen" style="display:none">
+  <div class="auth-card" style="text-align:center">
+    <svg width="76" height="76" viewBox="0 0 96 96" fill="none" style="margin:0 auto">
+      <defs><clipPath id="rcdc"><rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)"/></clipPath></defs>
+      <rect x="22" y="22" width="52" height="52" rx="7" transform="rotate(45 48 48)" fill="#5C2D0A"/>
+      <polygon points="48,8 80,48 48,48" fill="#F5B800" clip-path="url(#rcdc)"/>
+      <polygon points="48,8 48,48 16,48" fill="#C8291C" clip-path="url(#rcdc)"/>
+      <polygon points="48,48 80,48 48,88" fill="#7AB033" clip-path="url(#rcdc)"/>
+      <polygon points="48,48 48,88 16,48" fill="#4A2208" clip-path="url(#rcdc)"/>
+    </svg>
+    <div style="font-size:19px;font-weight:700;color:var(--accent);margin-top:14px">Connection required to continue</div>
+    <div style="font-size:13px;color:var(--gray-500);margin-top:10px;line-height:1.6">This device has been offline too long to keep working on a cached login. Reconnect and sign in again to continue.</div>
+    <div id="reconnect-pending-note" style="display:none;font-size:12px;color:var(--gray-400);margin-top:12px;padding:10px;background:var(--gray-50);border-radius:var(--radius)">Any sales recorded while offline are still saved on this device and will sync once you're signed in again.</div>
+    <button class="auth-btn" style="margin-top:18px" onclick="showAuthScreen()">Go to Sign In →</button>
   </div>
 </div>
 

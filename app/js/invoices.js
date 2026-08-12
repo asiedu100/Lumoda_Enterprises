@@ -552,6 +552,12 @@ async function trySyncOfflineQueueItem(item) {
     return { ok: true };
   } catch (err) {
     if (isNetworkError(err)) return { ok: false, stillOffline: true };
+    // A stale/expired access token reaches the server fine (not a network
+    // failure) but gets rejected — safe to retry once the token refreshes,
+    // NOT a permanent rejection of the sale itself. isAuthTokenStaleError
+    // (auth.js) explicitly excludes the disabled-account message, so a
+    // revoked user's queued sale still routes to needsReview below, not here.
+    if (typeof isAuthTokenStaleError === 'function' && isAuthTokenStaleError(err)) return { ok: false, staleAuth: true };
     return { ok: false, needsReview: true, error: err.message || 'Could not sync this sale' };
   }
 }
@@ -590,6 +596,28 @@ async function trySyncOfflineQueue() {
         LS.set(OFFLINE_QUEUE_KEY, queueNow);
         markPlaceholderNeedsReview(current.invoice.id);
         changed = true;
+      } else if (result.staleAuth) {
+        // Left pending indefinitely, this would be indistinguishable from
+        // an item that's simply waiting for signal — so it's bounded. But
+        // the bound is measured in CONNECTED time (getCumulativeOnlineMs,
+        // core.js), not wall-clock time: a device genuinely offline over a
+        // long weekend must not escalate a perfectly good sale just
+        // because wall-clock hours passed with nothing actually retried.
+        // Once STALE_TOKEN_RETRY_LIMIT_MS of *online* time has elapsed
+        // since this item's first auth-stale failure and it's still
+        // failing, something is permanently wrong (a refresh token that's
+        // outlived its own lifetime, most likely), and it's escalated to
+        // needsReview instead of retried forever.
+        const firstFailureOnlineMs = queueNow[idx].firstAuthFailureOnlineMs != null ? queueNow[idx].firstAuthFailureOnlineMs : getCumulativeOnlineMs();
+        if (getCumulativeOnlineMs() - firstFailureOnlineMs > STALE_TOKEN_RETRY_LIMIT_MS) {
+          queueNow[idx].status = 'failed';
+          queueNow[idx].error = 'Could not verify your session for over 24 hours of actual connected time — this needs a manual review rather than continuing to retry automatically.';
+          markPlaceholderNeedsReview(current.invoice.id);
+        } else {
+          queueNow[idx].firstAuthFailureOnlineMs = firstFailureOnlineMs;
+        }
+        LS.set(OFFLINE_QUEUE_KEY, queueNow);
+        changed = true;
       }
       // result.stillOffline: leave this one pending and move on to the next
       // — one item that can't be classified shouldn't block the rest of the
@@ -625,6 +653,7 @@ async function retryOfflineQueueItem(clientRef) {
   if (!item) return;
   item.status = 'pending';
   item.error = null;
+  item.firstAuthFailureOnlineMs = null; // a manual retry gets a fresh retry window, not the old clock
   LS.set(OFFLINE_QUEUE_KEY, queue);
   renderOfflineQueueBadge();
   await trySyncOfflineQueue();
