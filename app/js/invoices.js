@@ -64,6 +64,30 @@ function _updateCustomerTypePills(type) {
 // ============================================================
 let invoiceFilter = { text:'', status:'' };
 
+const PUBLIC_SITE_URL = 'https://lumoda.netlify.app';
+
+function receiptQrMarkup() {
+  let qrDataUrl = '';
+  try {
+    if (typeof qrcode === 'function') {
+      const qr = qrcode(0, 'M');
+      qr.addData(PUBLIC_SITE_URL);
+      qr.make();
+      qrDataUrl = qr.createDataURL(4, 2);
+    }
+  } catch (error) {
+    console.warn('Could not generate receipt QR code:', error);
+  }
+
+  return '<div style="margin:16px auto 0;text-align:center;font-size:11px;color:#666;page-break-inside:avoid">' +
+    '<div style="font-weight:700;margin-bottom:6px">Scan to visit our website</div>' +
+    (qrDataUrl
+      ? '<img src="'+escapeHtml(qrDataUrl)+'" alt="QR code for '+escapeHtml(PUBLIC_SITE_URL)+'" width="132" height="132" style="display:block;width:132px;height:132px;margin:0 auto;border:4px solid white">'
+      : '<div style="padding:12px;border:1px solid #ddd;display:inline-block">QR unavailable. Visit <a href="'+escapeHtml(PUBLIC_SITE_URL)+'">'+escapeHtml(PUBLIC_SITE_URL)+'</a></div>') +
+    '<div style="margin-top:5px;font-size:10px">'+escapeHtml(PUBLIC_SITE_URL)+'</div>' +
+  '</div>';
+}
+
 function renderInvoices() {
   let invoices = filterByLoc(getInvoices());
   if (!isAdmin()) invoices = invoices.filter(i => i.createdBy === currentUser.id);
@@ -300,8 +324,26 @@ function updateChangeDisplay() {
   changeEl.style.color = change >= 0 ? 'var(--brand-green)' : 'var(--brand-red)';
 }
 
+// Thin wrapper: disables the Save button itself for the duration of a
+// submission, not just the invoiceSaving flag. The flag alone has a real
+// gap — it resets the moment a fast/failed attempt finishes, so reopening
+// the form afterward (e.g. because the "saved offline" toast was missed)
+// is a fresh click with nothing to say "this might be the same sale,"
+// letting two genuinely separate invoices get created for one intended
+// transaction. Disabling the actual button closes that gap regardless of
+// how the resubmission happens.
 async function createInvoice() {
   if (invoiceSaving) return;
+  const btn = document.getElementById('invoice-submit-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await createInvoiceSubmit();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function createInvoiceSubmit() {
   invoiceSaving = true;
 
   const name       = document.getElementById('inv-cust-name').value.trim();
@@ -444,12 +486,19 @@ async function createInvoice() {
       if (isCashSale && rpcPayload && isNetworkError(err)) {
         queueOfflineCashSale(invoice, rpcPayload);
         closeModal('invoice-modal');
-        toast('No connection — cash sale '+number+' saved and will sync automatically', 'info');
         currentLocation = 'All';
         renderDashboard();
         if (document.getElementById('page-cashsales').classList.contains('active')) renderCashSales();
         try { navigator.clipboard.writeText(generateInvoiceText(invoice)); } catch(e) {}
         printInvoice(invoice);
+        // A toast alone (auto-dismisses in ~3s, right as the modal closes
+        // and the page re-renders) is easy to miss — missing it is exactly
+        // what invites a resubmit. Opening the receipt itself, with the
+        // offline-sync banner from buildInvoiceHTML, requires an explicit
+        // Close click, so there's no ambiguity about whether this sale
+        // actually went through.
+        toast('No connection — cash sale '+number+' saved and will sync automatically', 'info');
+        viewInvoice(invoice.id);
         return;
       }
 
@@ -827,7 +876,9 @@ function buildInvoiceHTML(inv) {
 
     (inv.notes ? '<div style="margin-top:10px;padding:10px;background:var(--gray-50);border-radius:var(--radius);font-size:13px;color:var(--gray-600)">'+escapeHtml(inv.notes)+'</div>' : '') +
     (inv.deleted ? '<div style="margin-top:10px;padding:8px 12px;background:#fee2e2;border-radius:var(--radius);font-size:12px;color:#991b1b">⚠ Deleted by '+escapeHtml(inv.deletedBy)+' on '+fmtDateTime(inv.deletedAt)+'</div>' : '') +
-  '</div>';
+    (inv.offlineSync==='pending' ? '<div style="margin-top:10px;padding:8px 12px;background:#fef9c3;border-radius:var(--radius);font-size:12px;color:#854d0e">⏳ No connection when this was recorded — saved on this device and will sync automatically once you\'re back online.</div>' : '') +
+    (inv.offlineSync==='failed' ? '<div style="margin-top:10px;padding:8px 12px;background:#fee2e2;border-radius:var(--radius);font-size:12px;color:#991b1b">⚠ Could not sync automatically — open the Offline Sales Queue to review.</div>' : '') +
+  '</div>' + receiptQrMarkup();
 }
 
 async function deleteInvoice(id) {
@@ -1496,6 +1547,7 @@ function printInvoice(inv) {
       <div style="margin-top:10px;font-size:11px;color:#555">Prepared By: ${escapeHtml(inv.createdByName || 'System')}</div>
       <div style="margin-top:16px;text-align:center;font-size:10px;color:#666">Goods sold out are not returnable</div>
     </div>
+    ${receiptQrMarkup()}
   `;
 
   const printArea = document.getElementById('print-area');
